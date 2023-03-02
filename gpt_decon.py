@@ -1,3 +1,4 @@
+#%%
 from __future__ import annotations
 
 import math
@@ -5,6 +6,7 @@ from typing import Callable
 
 import jax
 from jax.experimental.maps import xmap
+from optax import softmax_cross_entropy_with_integer_labels
 from simple_pytree import Pytree, static_field
 from jax.numpy import mean, var, sqrt, tanh, pi
 from jax.nn import softmax
@@ -99,7 +101,7 @@ class GptBlock(Pytree):
         self.ffnf = xmap(ffn.f, [None, 'T'], 'T')
 
     # x: (n_channels, T)
-    def __call__(self, x: Arr) -> Arr:
+    def f(self, x: Arr) -> Arr:
         x += self.mha.f(self.ln1f(x))
         x += self.ffnf(self.ln2f(x))
         return x
@@ -110,7 +112,30 @@ class GptDecoder(Pytree):
         self.blocks = blocks
 
     # x: (n_channels, T)
-    def __call__(self, x: Arr) -> Arr:
+    def f(self, x: Arr) -> Arr:
         for block in self.blocks:
-            x = block(x)
+            x = block.f(x)
         return x
+
+
+class Gpt(Pytree):
+    T: int = static_field()
+
+    def __init__(self, T: int, decoder: GptDecoder, token_embed: Arr, position_embed: Arr, ln: LN):
+        self.decoder = decoder
+        self.ln = ln
+        self.te = token_embed
+        self.pe = position_embed
+        self.T = T
+
+    # x: (n_channels, T)
+    def f(self, x: Arr) -> Arr:
+        x = self.te[x] + self.pe[self.T]
+        return self.ln.f(self.decoder.f(x))
+
+
+def gpt_loss(gpt: Gpt, inputs: list[int], labels: list[int]) -> Arr:
+    logits = gpt.f(jnp.array(inputs))
+    return softmax_cross_entropy_with_integer_labels(logits, labels)
+
+
