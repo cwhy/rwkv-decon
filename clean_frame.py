@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import math
-from typing import NamedTuple, TypeVar, Callable, List, TypedDict
+from typing import NamedTuple, TypeVar, Callable, List, TypedDict, Union, Literal, Final
 
 import jax
 import jax.numpy as jnp
@@ -38,18 +38,54 @@ def gelu(x: Arr) -> Arr:
     return 0.5 * x * (1 + tanh(sqrt(2 / pi) * (x + 0.044715 * x ** 3)))
 
 
-class Linear:
-    class Config(TypedDict):
-        n_in: int
-        n_out: int
+ArrayGen = Literal['kaiming', 'dropout', 'embedding', 'normal']
 
+
+class WeightConfig(NamedTuple):
+    # from in to out
+    name: str
+    shape: tuple[int, ...]
+    init: Union[ArrayGen, int, float] = "kaiming"
+    scale: float = 1
+
+
+class MakeLinear(NamedTuple):
+    n_in: int
+    n_out: int
+    w_name: str = "w"
+    b_name: str = "b"
+    w_init: Literal["kaiming"] = "kaiming"
+    b_init: Literal[0] = 0
+
+    def make(self) -> Linear:
+        return Linear(self)
+
+
+class Linear:
     class Weights(TypedDict):
         w: Arr
         b: Arr
 
-    def __init__(self, config: Config):
-        self.n_in = config['n_in']
-        self.n_out = config['n_out']
+    class MakeWeights(TypedDict):
+        w: WeightConfig
+        b: WeightConfig
+
+    def __init__(self, config: MakeLinear):
+        self.config = config
+        self.n_in = config.n_in
+        self.n_out = config.n_out
+
+        self.weight_configs = self.MakeWeights(
+            w=WeightConfig(
+                name=config.w_name,
+                shape=(self.n_out, self.n_in),
+                init=config.w_init
+            ),
+            b=WeightConfig(
+                name=config.b_name,
+                shape=(self.n_out,),
+                init=config.b_init)
+        )
 
     def init_params(self):
         return self.Weights(
@@ -57,22 +93,33 @@ class Linear:
             b=jnp.zeros((self.n_out,))
         )
 
-    def f(self, w: Linear.Weights, x: Arr) -> Arr:
+    def f(self, w: Weights, x: Arr) -> Arr:
         assert_shape(x, (self.n_in,))
         result = w['w'] @ x + w['b']
         assert_shape(result, (self.n_out,))
         return result
 
 
-class GptMha:
-    class Config(TypedDict):
-        n_channels: int
-        n_heads: int
-        T: int
+class MakeGptMha(NamedTuple):
+    n_channels: int
+    n_heads: int
+    T: int
+    QKV_name: str = "QKV"
+    QKV_init: Literal["normal"] = "normal"
+    QKV_scale: float = 0.02
 
+    def make(self) -> GptMha:
+        return GptMha(self)
+
+
+class GptMha:
     class Weights(TypedDict):
         QKV: Arr
         linear: Linear.Weights
+
+    class MakeWeights(TypedDict):
+        QKV: WeightConfig
+        linear: Linear.MakeWeights
 
     def causal_dot_attention(self, q: Arr, k: Arr, v: Arr) -> Arr:
         assert_shape([q, k, v], (self.dim_heads, self.T))
@@ -80,16 +127,27 @@ class GptMha:
         assert_shape(result, (self.T, self.dim_heads))
         return result
 
-    def __init__(self, config: Config):
-        self.n_channels = config['n_channels']
-        self.n_heads = config['n_heads']
-        self.T = config['T']
-        self.linear = Linear({'n_in': self.n_channels, 'n_out': self.n_channels})
+    def __init__(self, config: MakeGptMha):
+        self.n_channels = config.n_channels
+        self.n_heads = config.n_heads
+        self.T = config.T
+
+        self.linear = MakeLinear(self.n_channels, self.n_channels).make()
         self.scale = math.sqrt(self.n_channels)
         self.mask = jnp.tril(jnp.ones((self.T, self.T)))
         self.linearf = for_all_T(self.linear.f)
         assert self.n_channels % self.n_heads == 0, 'n_channels must be divisible by n_heads'
         self.dim_heads: int = self.n_channels // self.n_heads
+
+        self.weight_configs = self.MakeWeights(
+            QKV=WeightConfig(
+                name=config.QKV_name,
+                shape=(3, self.n_heads, self.dim_heads, self.n_channels),
+                init=config.QKV_init,
+                scale=config.QKV_scale
+            ),
+            linear=self.linear.weight_configs
+        )
 
     def init_params(self):
         return GptMha.Weights(
@@ -113,16 +171,40 @@ class GptMha:
         return result
 
 
-class LN:
-    class Config(TypedDict):
-        eps: float
+class MakeLN(NamedTuple):
+    eps: float
+    w_name: str = "w"
+    b_name: str = "b"
+    w_init: Literal[0] = 0
+    b_init: Literal[0] = 0
 
+    def make(self) -> LN:
+        return LN(self)
+
+
+class LN:
     class Weights(TypedDict):
         w: Arr
         b: Arr
 
-    def __init__(self, config: Config):
-        self.eps = config['eps']
+    class MakeWeights(TypedDict):
+        w: WeightConfig
+        b: WeightConfig
+
+    def __init__(self, config: MakeLN):
+        self.eps = config.eps
+        self.weight_configs = self.MakeWeights(
+            w=WeightConfig(
+                name=config.w_name,
+                shape=(1,),
+                init=config.w_init
+            ),
+            b=WeightConfig(
+                name=config.b_name,
+                shape=(1,),
+                init=config.b_init
+            )
+        )
 
     @staticmethod
     def init_params() -> LN.Weights:
@@ -138,19 +220,31 @@ class LN:
         return o * i + w['b']
 
 
-class GptFfn:
-    class Config(TypedDict):
-        n_channels: int
-        T: int
+class MakeGptFfn(NamedTuple):
+    n_channels: int
+    T: int
 
+    def make(self) -> GptFfn:
+        return GptFfn(self)
+
+
+class GptFfn:
     class Weights(TypedDict):
         linear1: Linear.Weights
         linear2: Linear.Weights
 
-    def __init__(self, config: Config):
-        self.n_channels = config['n_channels']
-        self.linear1 = Linear({'n_in': self.n_channels, 'n_out': self.n_channels})
-        self.linear2 = Linear({'n_in': self.n_channels, 'n_out': self.n_channels})
+    class MakeWeights(TypedDict):
+        linear1: Linear.MakeWeights
+        linear2: Linear.MakeWeights
+
+    def __init__(self, config: MakeGptFfn):
+        self.n_channels = config.n_channels
+        self.linear1 = MakeLinear(self.n_channels, self.n_channels).make()
+        self.linear2 = MakeLinear(self.n_channels, self.n_channels).make()
+        self.weight_configs = self.MakeWeights(
+            linear1=self.linear1.weight_configs,
+            linear2=self.linear2.weight_configs
+        )
 
     def init_params(self):
         return GptFfn.Weights(
@@ -165,29 +259,47 @@ class GptFfn:
         return result
 
 
-class GptBlock:
-    class Config(TypedDict):
-        eps: float
-        n_channels: int
-        n_heads: int
-        T: int
+class MakeGptBlock(NamedTuple):
+    eps: float
+    n_channels: int
+    n_heads: int
+    T: int
 
+    def make(self) -> GptBlock:
+        return GptBlock(self)
+
+
+class GptBlock:
     class Weights(TypedDict):
         mha: GptMha.Weights
         ffn: GptFfn.Weights
         ln1: LN.Weights
         ln2: LN.Weights
 
-    def __init__(self, config: GptBlock.Config):
-        self.T = config["T"]
-        self.n_channels = config["n_channels"]
-        self.mha = GptMha({"n_channels": config["n_channels"], "n_heads": config["n_heads"], "T": config["T"]})
-        self.ffn = GptFfn({"n_channels": config["n_channels"], "T": config["T"]})
-        self.ln1 = LN({"eps": config["eps"]})
-        self.ln2 = LN({"eps": config["eps"]})
+    class MakeWeights(TypedDict):
+        mha: GptMha.MakeWeights
+        ffn: GptFfn.MakeWeights
+        ln1: LN.MakeWeights
+        ln2: LN.MakeWeights
+
+    def __init__(self, config: MakeGptBlock):
+        self.T = config.T
+        self.n_channels = config.n_channels
+        self.mha = MakeGptMha(config.n_channels, config.n_heads, config.T).make()
+        self.ffn = MakeGptFfn(config.n_channels, config.T).make()
+        self.ln1 = MakeLN(config.eps).make()
+        self.ln2 = MakeLN(config.eps).make()
+
         self.ffnf = for_all_T(self.ffn.f)
         self.ln1f = for_all_T(self.ln1.f)
         self.ln2f = for_all_T(self.ln2.f)
+
+        self.weight_configs = self.MakeWeights(
+            mha=self.mha.weight_configs,
+            ffn=self.ffn.weight_configs,
+            ln1=self.ln1.weight_configs,
+            ln2=self.ln2.weight_configs
+        )
 
     def init_params(self):
         return GptBlock.Weights(
@@ -206,25 +318,32 @@ class GptBlock:
         return x
 
 
-class GptDecoder:
-    class Config(TypedDict):
-        eps: float
-        n_channels: int
-        n_heads: int
-        T: int
-        n_blocks: int
+class MakeGptDecoder(NamedTuple):
+    eps: float
+    n_channels: int
+    n_heads: int
+    T: int
+    n_blocks: int
 
+    def make(self) -> GptDecoder:
+        return GptDecoder(self)
+
+
+class GptDecoder:
     class Weights(TypedDict):
         blocks: List[GptBlock.Weights]
 
-    def __init__(self, config: GptDecoder.Config):
-        self.T = config["T"]
-        self.n_channels = config["n_channels"]
-        self.blocks = [GptBlock({"eps": config["eps"],
-                                 "n_channels": config["n_channels"],
-                                 "n_heads": config["n_heads"],
-                                 "T": config["T"]})
-                       for _ in range(config["n_blocks"])]
+    class MakeWeights(TypedDict):
+        blocks: List[GptBlock.MakeWeights]
+
+    def __init__(self, config: MakeGptDecoder):
+        self.T = config.T
+        self.n_channels = config.n_channels
+        self.blocks = [MakeGptBlock(config.eps, config.n_channels, config.n_heads, config.T).make()
+                       for _ in range(config.n_blocks)]
+        self.weight_configs = self.MakeWeights(
+            blocks=[blk.weight_configs for blk in self.blocks]
+        )
 
     def init_params(self):
         return GptDecoder.Weights(
@@ -239,36 +358,52 @@ class GptDecoder:
         return x
 
 
-class Gpt:
-    class Config(TypedDict):
-        eps: float
-        n_channels: int
-        n_heads: int
-        T: int
-        n_blocks: int
-        n_tokens: int
-        n_vocab: int
+class MakeGpt(NamedTuple):
+    eps: float
+    n_channels: int
+    n_heads: int
+    T: int
+    n_blocks: int
+    n_tokens: int
+    n_vocab: int
 
+    te_name: str = 'te'
+    te_init: Literal['normal'] = 'normal'
+    te_scale: float = 0.02
+
+    def make(self) -> Gpt:
+        return Gpt(self)
+
+
+class Gpt:
     class Weights(TypedDict):
         te: Arr
         decoder: GptDecoder.Weights
         ln: LN.Weights
 
-    def __init__(self, config: Gpt.Config):
-        self.T = config["T"]
-        self.n_channels = config["n_channels"]
-        self.n_tokens = config["n_tokens"]
-        self.eps = config["eps"]
-        self.pe = jnp.zeros((config["T"], config["n_channels"]))
-        self.decoder = GptDecoder({"eps": config["eps"],
-                                   "n_channels": config["n_channels"],
-                                   "n_heads": config["n_heads"],
-                                   "T": config["T"],
-                                   "n_blocks": config["n_blocks"]})
+    class MakeWeights(TypedDict):
+        te: WeightConfig
+        decoder: GptDecoder.MakeWeights
+        ln: LN.MakeWeights
 
-        self.ln = LN({"eps": config["eps"]})
+    def __init__(self, config: MakeGpt):
+        self.T = config.T
+        self.n_channels = config.n_channels
+        self.n_tokens = config.n_tokens
+        self.eps = config.eps
+        self.pe = jnp.zeros((config.T, config.n_channels))
+        self.decoder = MakeGptDecoder(config.eps, config.n_channels, config.n_heads, config.T, config.n_blocks).make()
+        self.ln = MakeLN(config.eps).make()
 
         self.lnf = for_all_T(self.ln.f)
+
+        self.weight_configs = self.MakeWeights(
+            te=WeightConfig(config.te_name,
+                            (config.n_tokens, config.n_channels),
+                            config.te_init, config.te_scale),
+            decoder=self.decoder.weight_configs,
+            ln=self.ln.weight_configs
+        )
 
     def init_params(self):
         return Gpt.Weights(
@@ -294,21 +429,23 @@ def go(c, x: Arr) -> Arr:
     return c.f(c.init_params(), x)
 
 
-k = go(GptMha(GptMha.Config(n_channels=9,
-                            n_heads=3,
-                            T=5)), jnp.ones((5, 9)))
+k = go(MakeGptMha(n_channels=9,
+                  n_heads=3,
+                  T=5).make(), jnp.ones((5, 9)))
 
 print(k.shape)
-gpt_ = Gpt(Gpt.Config(eps=1e-5,
-                      n_channels=9,
-                      n_heads=3,
-                      T=5,
-                      n_blocks=2,
-                      n_tokens=10,
-                      n_vocab=10))
-
+gpt_ = MakeGpt(eps=1e-5,
+               n_channels=9,
+               n_heads=3,
+               T=5,
+               n_blocks=2,
+               n_tokens=10,
+               n_vocab=10).make()
 zz = go(gpt_, jnp.ones((5,), dtype=jnp.int32))
 
 print(zz.shape)
 print(gpt_loss(gpt_, [1, 2, 3, 4, 5], [2, 3, 4, 5, 6]))
 # %%
+w = gpt_.init_params()
+print(w)
+
