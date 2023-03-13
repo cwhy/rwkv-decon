@@ -145,8 +145,9 @@ class GptMha:
         QKV_scale: float = 0.02
 
         def make(self) -> GptMha:
-            check_config(self)
-            return GptMha(self)
+            new = self._replace(linear=self.linear._replace(n_in=self.n_channels, n_out=self.n_channels))
+            check_config(new)
+            return GptMha(new)
 
     class Weights(TypedDict):
         QKV: Arr
@@ -170,7 +171,7 @@ class GptMha:
         self.n_heads = config.n_heads
         self.T = config.T
 
-        self.linear = config.linear._replace(n_in=self.n_channels, n_out=self.n_channels).make()
+        self.linear = config.linear.make()
         self.scale = math.sqrt(self.n_channels)
         self.mask = jnp.tril(jnp.ones((self.T, self.T)))
         self.linearf = for_all_T(self.linear.f)
@@ -275,8 +276,11 @@ class GptFfn:
         linear2: Linear.Config = Linear.Config()
 
         def make(self) -> GptFfn:
-            check_config(self)
-            return GptFfn(self)
+            new = self._replace(
+                linear1=self.linear1._replace(n_in=self.n_channels, n_out=self.n_channels),
+                linear2=self.linear2._replace(n_in=self.n_channels, n_out=self.n_channels))
+            check_config(new)
+            return GptFfn(new)
 
     class Weights(TypedDict):
         linear1: Linear.Weights
@@ -288,8 +292,8 @@ class GptFfn:
 
     def __init__(self, config: Config):
         self.n_channels = config.n_channels
-        self.linear1 = config.linear1._replace(n_in=self.n_channels, n_out=self.n_channels).make()
-        self.linear2 = config.linear2._replace(n_in=self.n_channels, n_out=self.n_channels).make()
+        self.linear1 = config.linear1.make()
+        self.linear2 = config.linear2.make()
         self._weight_configs = self.MakeWeights(
             linear1=self.linear1.weight_configs,
             linear2=self.linear2.weight_configs
@@ -324,8 +328,13 @@ class GptBlock:
         ln2: LN.Config = LN.Config()
 
         def make(self) -> GptBlock:
-            check_config(self)
-            return GptBlock(self)
+            new = self._replace(
+                mha=self.mha._replace(n_channels=self.n_channels, T=self.T, n_heads=self.n_heads),
+                ffn=self.ffn._replace(n_channels=self.n_channels, T=self.T),
+                ln1=self.ln1._replace(eps=self.eps),
+                ln2=self.ln2._replace(eps=self.eps))
+            check_config(new)
+            return GptBlock(new)
 
     class Weights(TypedDict):
         mha: GptMha.Weights
@@ -342,10 +351,10 @@ class GptBlock:
     def __init__(self, config: Config):
         self.T = config.T
         self.n_channels = config.n_channels
-        self.mha = config.mha._replace(n_channels=self.n_channels, T=self.T, n_heads=config.n_heads).make()
-        self.ffn = config.ffn._replace(n_channels=self.n_channels, T=self.T).make()
-        self.ln1 = config.ln1._replace(eps=config.eps).make()
-        self.ln2 = config.ln2._replace(eps=config.eps).make()
+        self.mha = config.mha.make()
+        self.ffn = config.ffn.make()
+        self.ln1 = config.ln1.make()
+        self.ln2 = config.ln2.make()
 
         self.ffnf = for_all_T(self.ffn.f)
         self.ln1f = for_all_T(self.ln1.f)
@@ -389,8 +398,10 @@ class GptDecoder:
         blocks: GptBlock.Config = GptBlock.Config()
 
         def make(self) -> GptDecoder:
-            check_config(self)
-            return GptDecoder(self)
+            new = self._replace(blocks=self.blocks._replace(eps=self.eps, n_channels=self.n_channels,
+                                                            n_heads=self.n_heads, T=self.T))
+            check_config(new)
+            return GptDecoder(new)
 
     class Weights(TypedDict):
         blocks: List[GptBlock.Weights]
@@ -402,9 +413,7 @@ class GptDecoder:
         assert config.n_blocks is not None
         self.T = config.T
         self.n_channels = config.n_channels
-        self.blocks = [config.blocks._replace(eps=config.eps, n_channels=config.n_channels,
-                                              n_heads=config.n_heads, T=config.T).make()
-                       for _ in range(config.n_blocks)]
+        self.blocks = [config.blocks.make() for _ in range(config.n_blocks)]
 
         self._weight_configs = self.MakeWeights(
             blocks=[blk.weight_configs for blk in self.blocks]
@@ -445,8 +454,13 @@ class Gpt:
         ln: LN.Config = LN.Config()
 
         def make(self) -> Gpt:
-            check_config(self)
-            return Gpt(self)
+            new = self._replace(decoder=self.decoder._replace(eps=self.eps, n_channels=self.n_channels,
+                                                                n_heads=self.n_heads, T=self.T,
+                                                                n_blocks=self.n_blocks),
+                                ln=self.ln._replace(eps=self.eps))
+
+            check_config(new)
+            return Gpt(new)
 
     class Weights(TypedDict):
         te: Arr
@@ -468,9 +482,7 @@ class Gpt:
         self.n_tokens = config.n_tokens
         self.eps = config.eps
         self.pe = jnp.zeros((config.T, config.n_channels))
-        self.decoder = config.decoder._replace(eps=config.eps, n_channels=config.n_channels,
-                                               n_blocks=config.n_blocks,
-                                               n_heads=config.n_heads, T=config.T).make()
+        self.decoder = config.decoder.make()
         self.ln = config.ln._replace(eps=config.eps).make()
 
         self.lnf = for_all_T(self.ln.f)
