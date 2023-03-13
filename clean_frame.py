@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import math
-from typing import NamedTuple, TypeVar, Callable, List, TypedDict, Union, Literal, Final
+from abc import abstractmethod
+from typing import NamedTuple, TypeVar, Callable, List, TypedDict, Union, Literal, Final, Protocol, Mapping, cast
 
 import jax
 import jax.numpy as jnp
@@ -59,6 +60,20 @@ class MakeLinear(NamedTuple):
 
     def make(self) -> Linear:
         return Linear(self)
+
+
+WeightConfigTree = Mapping[str, Union[WeightConfig, "WeightConfigTree", list["WeightConfigTree"]]]
+WeightsTree = dict[str, Union[Arr, "WeightsTree", list["WeightsTree"]]]
+
+
+class NNModule(Protocol):
+    def f(self, w: W, x: Arr) -> Arr:
+        ...
+
+    @abstractmethod
+    @property
+    def weight_configs(self) -> WeightConfigTree:
+        ...
 
 
 class Linear:
@@ -425,6 +440,24 @@ def gpt_loss(gpt: Gpt, inputs: list[int], labels: list[int]) -> Arr:
     return softmax_cross_entropy_with_integer_labels(logits, jnp.array(labels))
 
 
+def load_weights(weight_configs: WeightConfigTree, weights_dict: dict[str, Arr], prefix: str = "") -> WeightsTree:
+    weights: WeightsTree = {}
+    for name, weight_config in weight_configs.items():
+        if isinstance(weight_config, WeightConfig):
+            weights[name] = weights_dict[prefix + weight_config.name]
+        else:
+            prefix += "." if prefix else ""
+            prefix += name + "." if name else ""
+            if isinstance(weight_config, dict):
+                weight_config = cast(WeightConfigTree, weight_config)
+                weights[name] = load_weights(weight_config, weights_dict, prefix)
+            else:
+                weight_config = cast(list[WeightConfigTree], weight_config)
+                weights[name] = [load_weights(wc, weights_dict, prefix) for wc in weight_config]
+    return weights
+
+
+
 def go(c, x: Arr) -> Arr:
     return c.f(c.init_params(), x)
 
@@ -448,4 +481,3 @@ print(gpt_loss(gpt_, [1, 2, 3, 4, 5], [2, 3, 4, 5, 6]))
 # %%
 w = gpt_.init_params()
 print(w)
-
