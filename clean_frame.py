@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 from abc import abstractmethod
+from collections import defaultdict
 from typing import NamedTuple, TypeVar, Callable, List, TypedDict, Union, Literal, Protocol, Mapping, cast, \
     Optional
 
@@ -58,11 +59,6 @@ class NNModule(Protocol):
     def f(self, w: dict, x: Arr) -> Arr:
         ...
 
-    @property
-    @abstractmethod
-    def weight_configs(self) -> WeightConfigTree:
-        pass
-
 
 T = TypeVar('T')
 
@@ -70,7 +66,7 @@ T = TypeVar('T')
 def check_config(config: NamedTuple) -> None:
     for k, v in config._asdict().items():
         if v is None:
-            raise ValueError(f"Missing config '{k}' in {config}")
+            raise ValueError(f"Missing config '{k}' in {config.__class__}")
 
 
 WeightConfigTree = Mapping[str, Union[WeightConfig, "WeightConfigTree", list["WeightConfigTree"]]]
@@ -90,6 +86,22 @@ class Linear:
             check_config(self)
             return Linear(self)
 
+        @property
+        def weights(self) -> Linear.MakeWeights:
+            assert self.n_in is not None
+            assert self.n_out is not None
+            return Linear.MakeWeights(
+                w=WeightConfig(
+                    name=self.w_name,
+                    shape=(self.n_out, self.n_in),
+                    init=self.w_init
+                ),
+                b=WeightConfig(
+                    name=self.b_name,
+                    shape=(self.n_out,),
+                    init=self.b_init)
+            )
+
     class Weights(TypedDict):
         w: Arr
         b: Arr
@@ -104,22 +116,6 @@ class Linear:
         assert config.n_out is not None
         self.n_in = config.n_in
         self.n_out = config.n_out
-
-        self._weight_configs = self.MakeWeights(
-            w=WeightConfig(
-                name=config.w_name,
-                shape=(self.n_out, self.n_in),
-                init=config.w_init
-            ),
-            b=WeightConfig(
-                name=config.b_name,
-                shape=(self.n_out,),
-                init=config.b_init)
-        )
-
-    @property
-    def weight_configs(self) -> Linear.MakeWeights:
-        return self._weight_configs
 
     def init_params(self):
         return self.Weights(
@@ -144,10 +140,35 @@ class GptMha:
         QKV_init: Literal["normal"] = "normal"
         QKV_scale: float = 0.02
 
-        def make(self) -> GptMha:
+        def fill(self) -> GptMha.Config:
             new = self._replace(linear=self.linear._replace(n_in=self.n_channels, n_out=self.n_channels))
             check_config(new)
-            return GptMha(new)
+            return new
+
+        def make(self) -> GptMha:
+            return GptMha(self.fill())
+
+        @property
+        def dim_heads(self) -> int:
+            assert self.n_channels is not None
+            assert self.n_heads is not None
+            return self.n_channels // self.n_heads
+
+        @property
+        def weights(self) -> GptMha.MakeWeights:
+            filled = self.fill()
+            assert filled.n_channels is not None
+            assert filled.n_heads is not None
+            assert filled.dim_heads is not None
+            return GptMha.MakeWeights(
+                QKV=WeightConfig(
+                    name=filled.QKV_name,
+                    shape=(3, filled.n_heads, filled.dim_heads, filled.n_channels),
+                    init=filled.QKV_init,
+                    scale=filled.QKV_scale
+                ),
+                linear=filled.linear.weights
+            )
 
     class Weights(TypedDict):
         QKV: Arr
@@ -167,30 +188,17 @@ class GptMha:
         assert config.n_channels is not None
         assert config.n_heads is not None
         assert config.T is not None
+        assert config.dim_heads is not None
         self.n_channels = config.n_channels
         self.n_heads = config.n_heads
         self.T = config.T
+        self.dim_heads = config.dim_heads
 
         self.linear = config.linear.make()
         self.scale = math.sqrt(self.n_channels)
         self.mask = jnp.tril(jnp.ones((self.T, self.T)))
         self.linearf = for_all_T(self.linear.f)
         assert self.n_channels % self.n_heads == 0, 'n_channels must be divisible by n_heads'
-        self.dim_heads: int = self.n_channels // self.n_heads
-
-        self._weight_configs = self.MakeWeights(
-            QKV=WeightConfig(
-                name=config.QKV_name,
-                shape=(3, self.n_heads, self.dim_heads, self.n_channels),
-                init=config.QKV_init,
-                scale=config.QKV_scale
-            ),
-            linear=self.linear.weight_configs
-        )
-
-    @property
-    def weight_configs(self) -> GptMha.MakeWeights:
-        return self._weight_configs
 
     def init_params(self):
         return GptMha.Weights(
@@ -226,6 +234,21 @@ class LN:
             check_config(self)
             return LN(self)
 
+        @property
+        def weights(self) -> LN.MakeWeights:
+            return LN.MakeWeights(
+                w=WeightConfig(
+                    name=self.w_name,
+                    shape=(1,),
+                    init=self.w_init
+                ),
+                b=WeightConfig(
+                    name=self.b_name,
+                    shape=(1,),
+                    init=self.b_init
+                )
+            )
+
     class Weights(TypedDict):
         w: Arr
         b: Arr
@@ -237,22 +260,6 @@ class LN:
     def __init__(self, config: Config):
         assert config.eps is not None
         self.eps = config.eps
-        self._weight_configs = self.MakeWeights(
-            w=WeightConfig(
-                name=config.w_name,
-                shape=(1,),
-                init=config.w_init
-            ),
-            b=WeightConfig(
-                name=config.b_name,
-                shape=(1,),
-                init=config.b_init
-            )
-        )
-
-    @property
-    def weight_configs(self) -> LN.MakeWeights:
-        return self._weight_configs
 
     @staticmethod
     def init_params() -> LN.Weights:
@@ -275,12 +282,23 @@ class GptFfn:
         linear1: Linear.Config = Linear.Config()
         linear2: Linear.Config = Linear.Config()
 
-        def make(self) -> GptFfn:
+        def fill(self) -> GptFfn.Config:
             new = self._replace(
                 linear1=self.linear1._replace(n_in=self.n_channels, n_out=self.n_channels),
                 linear2=self.linear2._replace(n_in=self.n_channels, n_out=self.n_channels))
             check_config(new)
-            return GptFfn(new)
+            return new
+
+        def make(self) -> GptFfn:
+            return GptFfn(self.fill())
+
+        @property
+        def weights(self) -> GptFfn.MakeWeights:
+            filled = self.fill()
+            return GptFfn.MakeWeights(
+                linear1=filled.linear1.weights,
+                linear2=filled.linear2.weights,
+            )
 
     class Weights(TypedDict):
         linear1: Linear.Weights
@@ -294,14 +312,6 @@ class GptFfn:
         self.n_channels = config.n_channels
         self.linear1 = config.linear1.make()
         self.linear2 = config.linear2.make()
-        self._weight_configs = self.MakeWeights(
-            linear1=self.linear1.weight_configs,
-            linear2=self.linear2.weight_configs
-        )
-
-    @property
-    def weight_configs(self) -> GptFfn.MakeWeights:
-        return self._weight_configs
 
     def init_params(self):
         return GptFfn.Weights(
@@ -327,14 +337,27 @@ class GptBlock:
         ln1: LN.Config = LN.Config()
         ln2: LN.Config = LN.Config()
 
-        def make(self) -> GptBlock:
+        def fill(self) -> GptBlock.Config:
             new = self._replace(
-                mha=self.mha._replace(n_channels=self.n_channels, T=self.T, n_heads=self.n_heads),
-                ffn=self.ffn._replace(n_channels=self.n_channels, T=self.T),
+                mha=self.mha._replace(n_channels=self.n_channels, T=self.T, n_heads=self.n_heads).fill(),
+                ffn=self.ffn._replace(n_channels=self.n_channels, T=self.T).fill(),
                 ln1=self.ln1._replace(eps=self.eps),
                 ln2=self.ln2._replace(eps=self.eps))
             check_config(new)
-            return GptBlock(new)
+            return new
+
+        def make(self) -> GptBlock:
+            return GptBlock(self.fill())
+
+        @property
+        def weights(self) -> GptBlock.MakeWeights:
+            filled = self.fill()
+            return GptBlock.MakeWeights(
+                mha=filled.mha.weights,
+                ffn=filled.ffn.weights,
+                ln1=filled.ln1.weights,
+                ln2=filled.ln2.weights,
+            )
 
     class Weights(TypedDict):
         mha: GptMha.Weights
@@ -359,17 +382,6 @@ class GptBlock:
         self.ffnf = for_all_T(self.ffn.f)
         self.ln1f = for_all_T(self.ln1.f)
         self.ln2f = for_all_T(self.ln2.f)
-
-        self._weight_configs = self.MakeWeights(
-            mha=self.mha.weight_configs,
-            ffn=self.ffn.weight_configs,
-            ln1=self.ln1.weight_configs,
-            ln2=self.ln2.weight_configs
-        )
-
-    @property
-    def weight_configs(self) -> GptBlock.MakeWeights:
-        return self._weight_configs
 
     def init_params(self):
         return GptBlock.Weights(
@@ -397,11 +409,25 @@ class GptDecoder:
         n_blocks: Optional[int] = None
         blocks: GptBlock.Config = GptBlock.Config()
 
-        def make(self) -> GptDecoder:
+        name: str = 'blocks'
+
+        def fill(self) -> GptDecoder.Config:
             new = self._replace(blocks=self.blocks._replace(eps=self.eps, n_channels=self.n_channels,
-                                                            n_heads=self.n_heads, T=self.T))
+                                                            n_heads=self.n_heads, T=self.T).fill())
             check_config(new)
-            return GptDecoder(new)
+            return new
+
+        def make(self) -> GptDecoder:
+            return GptDecoder(self.fill())
+
+        @property
+        def weights(self) -> GptDecoder.MakeWeights:
+            filled = self.fill()
+            assert filled.blocks is not None
+            assert filled.n_blocks is not None
+            return GptDecoder.MakeWeights(
+                blocks=[filled.blocks.weights] * filled.n_blocks
+            )
 
     class Weights(TypedDict):
         blocks: List[GptBlock.Weights]
@@ -414,14 +440,6 @@ class GptDecoder:
         self.T = config.T
         self.n_channels = config.n_channels
         self.blocks = [config.blocks.make() for _ in range(config.n_blocks)]
-
-        self._weight_configs = self.MakeWeights(
-            blocks=[blk.weight_configs for blk in self.blocks]
-        )
-
-    @property
-    def weight_configs(self) -> GptDecoder.MakeWeights:
-        return self._weight_configs
 
     def init_params(self):
         return GptDecoder.Weights(
@@ -453,14 +471,35 @@ class Gpt:
         decoder: GptDecoder.Config = GptDecoder.Config()
         ln: LN.Config = LN.Config()
 
-        def make(self) -> Gpt:
+        name: str = 'gpt'
+
+        def fill(self) -> Gpt.Config:
             new = self._replace(decoder=self.decoder._replace(eps=self.eps, n_channels=self.n_channels,
-                                                                n_heads=self.n_heads, T=self.T,
-                                                                n_blocks=self.n_blocks),
+                                                              n_heads=self.n_heads, T=self.T,
+                                                              n_blocks=self.n_blocks).fill(),
                                 ln=self.ln._replace(eps=self.eps))
 
             check_config(new)
-            return Gpt(new)
+            return new
+
+        def make(self) -> Gpt:
+            return Gpt(self.fill())
+
+        @property
+        def weights(self) -> Gpt.MakeWeights:
+            filled = self.fill()
+            assert filled.decoder is not None
+            assert filled.ln is not None
+            assert filled.n_tokens is not None
+            assert filled.n_channels is not None
+            return Gpt.MakeWeights(
+                te=WeightConfig(name=filled.te_name,
+                                init=filled.te_init,
+                                shape=(filled.n_tokens, filled.n_channels),
+                                scale=filled.te_scale),
+                decoder=filled.decoder.weights,
+                ln=filled.ln.weights
+            )
 
     class Weights(TypedDict):
         te: Arr
@@ -487,18 +526,6 @@ class Gpt:
 
         self.lnf = for_all_T(self.ln.f)
 
-        self._weight_configs = self.MakeWeights(
-            te=WeightConfig(config.te_name,
-                            (config.n_tokens, config.n_channels),
-                            config.te_init, config.te_scale),
-            decoder=self.decoder.weight_configs,
-            ln=self.ln.weight_configs
-        )
-
-    @property
-    def weight_configs(self) -> Gpt.MakeWeights:
-        return self._weight_configs
-
     def init_params(self):
         return Gpt.Weights(
             te=jax.random.normal(jax.random.PRNGKey(0), (self.n_tokens, self.n_channels)),
@@ -517,23 +544,6 @@ class Gpt:
 def gpt_loss(gpt: Gpt, inputs: list[int], labels: list[int]) -> Arr:
     logits = go(gpt, (jnp.array(inputs)))
     return softmax_cross_entropy_with_integer_labels(logits, jnp.array(labels))
-
-
-def load_weights(weight_configs: WeightConfigTree, weights_dict: dict[str, Arr], prefix: str = "") -> WeightsTree:
-    weights: WeightsTree = {}
-    for name, weight_config in weight_configs.items():
-        if isinstance(weight_config, WeightConfig):
-            weights[name] = weights_dict[prefix + weight_config.name]
-        else:
-            prefix += "." if prefix else ""
-            prefix += name + "." if name else ""
-            if isinstance(weight_config, dict):
-                weight_config = cast(WeightConfigTree, weight_config)
-                weights[name] = load_weights(weight_config, weights_dict, prefix)
-            else:
-                weight_config = cast(list[WeightConfigTree], weight_config)
-                weights[name] = [load_weights(wc, weights_dict, prefix) for wc in weight_config]
-    return weights
 
 
 def go(c, x: Arr) -> Arr:
@@ -558,6 +568,59 @@ print(zz.shape)
 print(gpt_loss(gpt_, [1, 2, 3, 4, 5], [2, 3, 4, 5, 6]))
 # %%
 www = gpt_.init_params()
-# print(w)
-wc = gpt_.weight_configs
-print(wc)
+# print(www)
+
+gpt_config = Gpt.Config(eps=1e-5,
+                        n_channels=9,
+                        n_heads=3,
+                        T=5,
+                        n_blocks=2,
+                        n_tokens=10,
+                        n_vocab=10,
+                        te_name='wte.weight',
+                        ln=LN.Config(w_name='ln_f.weight', b_name='ln_f.bias'),
+                        decoder=GptDecoder.Config(
+                            name='h',
+                            blocks=GptBlock.Config(
+                                mha=GptMha.Config(
+                                    QKV_name='attn.c_attn.weight',
+                                    linear=Linear.Config(w_name='attn.c_proj.weight',
+                                                         b_name='attn.c_proj.bias')
+                                ),
+                                ln1=LN.Config(w_name='ln_1.weight', b_name='ln_1.bias'),
+                                ffn=GptFfn.Config(
+                                    linear1=Linear.Config(w_name='mlp.c_fc.weight',
+                                                          b_name='mlp.c_fc.bias'),
+                                    linear2=Linear.Config(w_name='mlp.c_proj.weight',
+                                                          b_name='mlp.c_proj.bias')
+                                ),
+                                ln2=LN.Config(w_name='ln_2.weight', b_name='ln_2.bias')
+                            )
+                        )).fill()
+
+print(gpt_config)
+print(gpt_config.weights)
+
+
+# %%
+def load_weights(weight_configs: WeightConfigTree, weights_dict: dict[str, Arr], prefix: str = "") -> WeightsTree:
+    weights: WeightsTree = {}
+    for name, weight_config in weight_configs.items():
+        if isinstance(weight_config, WeightConfig):
+            weights[name] = weights_dict[prefix + weight_config.name]
+        else:
+            prefix += "." if prefix else ""
+            prefix += name + "." if name else ""
+            if isinstance(weight_config, dict):
+                weight_config = cast(WeightConfigTree, weight_config)
+                weights[name] = load_weights(weight_config, weights_dict, prefix)
+            else:
+                weight_config = cast(list[WeightConfigTree], weight_config)
+                weights[name] = [load_weights(wc, weights_dict, prefix) for wc in weight_config]
+    return weights
+
+z = defaultdict(int)
+ww = load_weights(gpt_config.weights, z)
+print(z.keys())
+
+# todo: separate weights from components for weight config
