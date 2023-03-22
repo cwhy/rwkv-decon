@@ -77,7 +77,7 @@ def config_weights_check_(config: ModuleConfig, weights: WeightsTree) -> None:
                 assert isinstance(part_config, list), err_msg
                 assert len(part_config) > 0, err_msg
                 if len(part_config) != len(w):
-                    raise ValueError(f"Wrong number of weights in list {name}: {len(w)} != {len(part_config)}")
+                    raise ValueError(f"Wrong number of weights in list {name}: weight {len(w)} != config {len(part_config)}")
                 assert isinstance(part_config[0], ModuleConfig), err_msg
                 if not isinstance(w, list):
                     raise ValueError(f"weights for {name} module is not a list: {type(w)}")

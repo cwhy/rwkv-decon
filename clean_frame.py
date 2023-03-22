@@ -210,8 +210,8 @@ class GptMha:
 class LN:
     class Config(NamedTuple):
         eps: Optional[float] = None
-        shape: Optional[tuple[int, ...]] = None
         norm_dim: Optional[int] = None
+        x_shape: Optional[tuple[int, ...]] = None
         w_name: str = "w"
         b_name: str = "b"
         w_init: Literal[0] = 0
@@ -225,17 +225,19 @@ class LN:
 
         @property
         def weights(self) -> WeightConfigDict:
-            assert self.shape is not None, 'shape must be specified'
+            assert self.norm_dim is not None, 'norm_dim must be specified'
+            assert self.x_shape is not None, 'x_shape must be specified'
             assert self.eps is not None, 'eps must be specified'
+            x_shape_unnormed_dims = self.x_shape[:self.norm_dim] + (1,) + self.x_shape[self.norm_dim + 1:]
             return dict(
                 w=WeightConfig(
                     name=self.w_name,
-                    shape=self.shape,
+                    shape=x_shape_unnormed_dims,
                     init=self.w_init
                 ),
                 b=WeightConfig(
                     name=self.b_name,
-                    shape=self.shape,
+                    shape=x_shape_unnormed_dims,
                     init=self.b_init
                 )
             )
@@ -265,10 +267,9 @@ class LN:
 
     # x: self.shape
     def f(self, w: LN.Weights, x: Arr) -> Arr:
-        o = x - mean(x, axis=self.config.norm_dim)
-        i = w['w'] * rsqrt(var(x, axis=self.config.norm_dim) + self.eps)
+        o = x - mean(x, axis=self.config.norm_dim, keepdims=True)
+        i = w['w'] * rsqrt(var(x, axis=self.config.norm_dim, keepdims=True) + self.eps)
         return o * i + w['b']
-
 
 
 class GptFfn:
@@ -340,12 +341,18 @@ class GptBlock:
         ln2: LN.Config = LN.Config()
         name: str = "gpt_block"
 
+        @property
+        def x_shape(self) -> tuple[int, int]:
+            assert self.n_channels is not None
+            assert self.T is not None
+            return self.T, self.n_channels
+
         def fill(self) -> GptBlock.Config:
             new = self._replace(
                 mha=self.mha._replace(n_channels=self.n_channels, T=self.T, n_heads=self.n_heads).fill(),
                 ffn=self.ffn._replace(n_channels=self.n_channels, T=self.T).fill(),
-                ln1=self.ln1._replace(eps=self.eps),
-                ln2=self.ln2._replace(eps=self.eps))
+                ln1=self.ln1._replace(eps=self.eps, norm_dim=0, x_shape=self.x_shape),
+                ln2=self.ln2._replace(eps=self.eps, norm_dim=0, x_shape=self.x_shape))
             check_config(new)
             return new
 
@@ -385,8 +392,8 @@ class GptBlock:
         self.ln2 = config.ln2.make()
 
         self.ffnf = for_all_T(self.ffn.f)
-        self.ln1f = for_all_T(self.ln1.f)
-        self.ln2f = for_all_T(self.ln2.f)
+        self.ln1f = self.ln1.f
+        self.ln2f = self.ln2.f
 
     def init_params(self):
         return GptBlock.Weights(
@@ -485,10 +492,12 @@ class Gpt:
         name: str = 'gpt'
 
         def fill(self) -> Gpt.Config:
+            assert self.T is not None, 'T must be specified'
+            assert self.n_channels is not None, 'n_channels must be specified'
             new = self._replace(decoder=self.decoder._replace(eps=self.eps, n_channels=self.n_channels,
                                                               n_heads=self.n_heads, T=self.T,
                                                               n_blocks=self.n_blocks).fill(),
-                                ln=self.ln._replace(eps=self.eps))
+                                ln=self.ln._replace(eps=self.eps, norm_dim=0, x_shape=(self.T, self.n_channels)))
 
             check_config(new)
             return new
@@ -542,9 +551,7 @@ class Gpt:
         self.n_tokens = config.n_tokens
         self.eps = config.eps
         self.decoder = config.decoder.make()
-        self.ln = config.ln._replace(eps=config.eps).make()
-
-        self.lnf = for_all_T(self.ln.f)
+        self.ln = config.ln.make()
 
     def init_params(self):
         return Gpt.Weights(
@@ -558,7 +565,7 @@ class Gpt:
         assert_shape(x, (self.T,))
         x = w['te'][x, :] + w['pe'][self.T, :]
         assert_shape(x, (self.T, self.n_channels))
-        result = self.lnf(w['ln'], self.decoder.f(w['decoder'], x))
+        result = self.ln.f(w['ln'], self.decoder.f(w['decoder'], x))
         assert_shape(result, (self.T, self.n_channels))
         return result
 
@@ -653,4 +660,6 @@ gpt_.f(gpt_config.weights_check(weights_tree_), jnp.ones((1024,), dtype=jnp.int3
 # TODO:
 # [done] implement weight check to parse a weight tree to proper weights
 # make shape a dict
-# fix layernorm issue
+# move out init_params
+# input/output shapes in config
+# fix layernorm issue: clever loading
