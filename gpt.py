@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import math
-from typing import NamedTuple, Optional, cast, TypedDict, List, Literal
+from functools import cache
+from typing import NamedTuple, Optional, cast, TypedDict, List, Literal, Union
 
 from chex import assert_shape
 from einops import rearrange
@@ -18,12 +19,20 @@ class GptMha:
     class Config(NamedTuple):
         n_channels: Optional[int] = None
         n_heads: Optional[int] = None
-        T: Optional[int] = None
+        n_seq: Optional[Union[int, Literal['dynamic']]] = None
         inf_mask: float = -1e10
         linear: Linear.Config = Linear.Config()
         QKV_linear: Linear.Config = Linear.Config()
 
         name: str = "mha"
+
+        @property
+        @cache
+        def T(self) -> Optional[int]:
+            if self.n_seq == 'dynamic':
+                return None
+            else:
+                return self.n_seq
 
         def fill(self) -> GptMha.Config:
             assert self.n_channels is not None, 'n_channels must be set'
@@ -63,7 +72,6 @@ class GptMha:
     def __init__(self, config: Config):
         assert config.n_channels is not None
         assert config.n_heads is not None
-        assert config.T is not None
         assert config.dim_heads is not None
         self.n_channels = config.n_channels
         self.n_heads = config.n_heads
@@ -76,7 +84,6 @@ class GptMha:
         self.scale = math.sqrt(self.dim_heads)
         self.linearf = for_all_T(self.linear.f)
         self.QKV_linearf = for_all_T(self.QKV_linear.f)
-        self.mask = self.get_mask(self.T)
         assert self.n_channels % self.n_heads == 0, 'n_channels must be divisible by n_heads'
 
     def get_mask(self, t: int) -> Arr:
@@ -84,15 +91,9 @@ class GptMha:
 
     def causal_dot_attention(self, q: Arr, k: Arr, v: Arr) -> Arr:
         assert_shape([q, k, v], (self.T, self.dim_heads))
-        result = softmax((q @ k.T) / self.scale + self.mask) @ v
-        assert_shape(result, (self.T, self.dim_heads))
-        return result
-
-    def causal_dot_attention_dyn(self, q: Arr, k: Arr, v: Arr) -> Arr:
-        assert_shape([q, k, v], (None, self.dim_heads))
         mask = self.get_mask(q.shape[0])
         result = softmax((q @ k.T) / self.scale + mask) @ v
-        assert_shape(result, (None, self.dim_heads))
+        assert_shape(result, (self.T, self.dim_heads))
         return result
 
     def f(self, w: GptMha.Weights, x: Arr) -> Arr:
@@ -103,8 +104,6 @@ class GptMha:
                             qkv=3,
                             n_heads=self.n_heads,
                             dim_heads=self.dim_heads)
-        assert_shape(q, (self.n_heads, self.dim_heads, self.T))
-
         extension_shape = ['n_head', ...]
         attended = xmap(self.causal_dot_attention, [extension_shape] * 3, extension_shape)(q, k, v)
         assert_shape(attended, (self.n_heads, self.T, self.dim_heads))
@@ -116,33 +115,22 @@ class GptMha:
         assert_shape(result, (self.T, self.n_channels))
         return result
 
-    def f_dyn(self, w: GptMha.Weights, x: Arr) -> Arr:
-        assert_shape(x, (None, self.n_channels))
-
-        q, k, v = rearrange(self.QKV_linearf(w['QKV_linear'], x),
-                            'T (qkv n_heads dim_heads) -> qkv n_heads T dim_heads',
-                            qkv=3,
-                            n_heads=self.n_heads,
-                            dim_heads=self.dim_heads)
-        extension_shape = ['n_head', ...]
-        attended = xmap(self.causal_dot_attention_dyn, [extension_shape] * 3, extension_shape)(q, k, v)
-        assert_shape(attended, (self.n_heads, None, self.dim_heads))
-        concatenated = jnp.concatenate(attended, -1)
-        assert_shape(concatenated, (None, self.n_channels))
-
-        result = self.linearf(w['linear'], concatenated)
-
-        assert_shape(result, (None, self.n_channels))
-        return result
-
 
 class GptFfn:
     class Config(NamedTuple):
         n_channels: Optional[int] = None
-        T: Optional[int] = None
+        n_seq: Optional[Union[int, Literal['dynamic']]] = None
         linear1: Linear.Config = Linear.Config()
         linear2: Linear.Config = Linear.Config()
         name: str = "ffn"
+
+        @property
+        @cache
+        def T(self) -> Optional[int]:
+            if self.n_seq == 'dynamic':
+                return None
+            else:
+                return self.n_seq
 
         def fill(self) -> GptFfn.Config:
             assert self.n_channels is not None
@@ -191,7 +179,7 @@ class GptBlock:
         eps: Optional[float] = None
         n_channels: Optional[int] = None
         n_heads: Optional[int] = None
-        T: Optional[int] = None
+        n_seq: Optional[Union[int, Literal['dynamic']]] = None
         mha: GptMha.Config = GptMha.Config()
         ffn: GptFfn.Config = GptFfn.Config()
         ln1: LN.Config = LN.Config()
@@ -199,15 +187,21 @@ class GptBlock:
         name: str = "gpt_block"
 
         @property
-        def x_shape(self) -> tuple[int, int]:
+        def T(self) -> Optional[int]:
+            if self.n_seq == 'dynamic':
+                return None
+            else:
+                return self.n_seq
+
+        @property
+        def x_shape(self) -> tuple[Optional[int], ...]:
             assert self.n_channels is not None
-            assert self.T is not None
             return self.T, self.n_channels
 
         def fill(self) -> GptBlock.Config:
             new = self._replace(
-                mha=self.mha._replace(n_channels=self.n_channels, T=self.T, n_heads=self.n_heads).fill(),
-                ffn=self.ffn._replace(n_channels=self.n_channels, T=self.T).fill(),
+                mha=self.mha._replace(n_channels=self.n_channels, n_seq=self.n_seq, n_heads=self.n_heads).fill(),
+                ffn=self.ffn._replace(n_channels=self.n_channels, n_seq=self.n_seq).fill(),
                 ln1=self.ln1._replace(eps=self.eps, norm_dims=(0,), x_shape=self.x_shape),
                 ln2=self.ln2._replace(eps=self.eps, norm_dims=(0,), x_shape=self.x_shape))
             check_config(new)
@@ -259,29 +253,29 @@ class GptBlock:
         assert_shape(x, (self.T, self.n_channels))
         return x
 
-    def f_dyn(self, w: GptBlock.Weights, x: Arr) -> Arr:
-        assert_shape(x, (None, self.n_channels))
-        x += self.mha.f_dyn(w['mha'], self.ln1f(w['ln1'], x))
-        x += self.ffnf(w['ffn'], self.ln2f(w['ln2'], x))
-
-        assert_shape(x, (None, self.n_channels))
-        return x
-
 
 class GptDecoder:
     class Config(NamedTuple):
         eps: Optional[float] = None
         n_channels: Optional[int] = None
         n_heads: Optional[int] = None
-        T: Optional[int] = None
+        n_seq: Optional[Union[int, Literal['dynamic']]] = None
         n_blocks: Optional[int] = None
         blocks: GptBlock.Config = GptBlock.Config()
 
         name: str = 'gpt_decoder'
 
+        @property
+        @cache
+        def T(self) -> Optional[int]:
+            if self.n_seq == 'dynamic':
+                return None
+            else:
+                return self.n_seq
+
         def fill(self) -> GptDecoder.Config:
             new = self._replace(blocks=self.blocks._replace(eps=self.eps, n_channels=self.n_channels,
-                                                            n_heads=self.n_heads, T=self.T).fill())
+                                                            n_heads=self.n_heads, n_seq=self.n_seq).fill())
             check_config(new)
             return new
 
@@ -320,22 +314,16 @@ class GptDecoder:
         assert_shape(x, (self.T, self.n_channels))
         return x
 
-    def f_dyn(self, w: GptDecoder.Weights, x: Arr) -> Arr:
-        assert_shape(x, (None, self.n_channels))
-        for blk, blk_w in zip(self.blocks, w['blocks']):
-            x = blk.f_dyn(blk_w, x)
-        assert_shape(x, (None, self.n_channels))
-        return x
-
 
 class Gpt:
     class Config(NamedTuple):
         eps: Optional[float] = None
         n_channels: Optional[int] = None
         n_heads: Optional[int] = None
-        T: Optional[int] = None
+        n_seq: Optional[Union[int, Literal['dynamic']]] = None
         n_blocks: Optional[int] = None
         n_tokens: Optional[int] = None
+        max_seq_len: Optional[int] = None
 
         te_name: str = 'te'
         te_init: Literal['normal'] = 'normal'
@@ -348,11 +336,17 @@ class Gpt:
 
         name: str = 'gpt'
 
+        @property
+        def T(self) -> Optional[int]:
+            if self.n_seq == 'dynamic':
+                return None
+            else:
+                return self.n_seq
+
         def fill(self) -> Gpt.Config:
-            assert self.T is not None, 'T must be specified'
             assert self.n_channels is not None, 'n_channels must be specified'
             new = self._replace(decoder=self.decoder._replace(eps=self.eps, n_channels=self.n_channels,
-                                                              n_heads=self.n_heads, T=self.T,
+                                                              n_heads=self.n_heads, n_seq=self.n_seq,
                                                               n_blocks=self.n_blocks).fill(),
                                 ln=self.ln._replace(eps=self.eps, norm_dims=(0,), x_shape=(self.T, self.n_channels)))
 
@@ -365,9 +359,9 @@ class Gpt:
         @property
         def weights(self) -> WeightConfigDict:
             filled = self.fill()
+            assert filled.max_seq_len is not None
             assert filled.n_tokens is not None
             assert filled.n_channels is not None
-            assert filled.T is not None
             return dict(
                 te=WeightConfig(name=filled.te_name,
                                 init=filled.te_init,
@@ -375,7 +369,7 @@ class Gpt:
                                 scale=filled.te_scale),
 
                 pe=WeightConfig(name=filled.pe_name,
-                                shape=(filled.T, filled.n_channels)),
+                                shape=(filled.max_seq_len, filled.n_channels)),
             )
 
         @property
@@ -418,8 +412,9 @@ class Gpt:
         return result
 
     def f_dyn(self, w: Gpt.Weights, x: Arr) -> Arr:
+        assert_shape(x, (self.T,))
         x = w['te'][x, :] + w['pe'][:x.shape[0], :]
-        assert_shape(x, (None, self.n_channels))
-        result = self.ln.f(w['ln'], self.decoder.f_dyn(w['decoder'], x))
-        assert_shape(result, (None, self.n_channels))
+        assert_shape(x, (self.T, self.n_channels))
+        result = self.ln.f(w['ln'], self.decoder.f(w['decoder'], x))
+        assert_shape(result, (self.T, self.n_channels))
         return result @ w['te'].T

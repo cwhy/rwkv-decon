@@ -46,7 +46,8 @@ if basic:
 gpt_config = Gpt.Config(eps=1e-5,
                         n_channels=768,
                         n_heads=12,
-                        T=1024,
+                        n_seq='dynamic',
+                        max_seq_len=1024,
                         n_blocks=12,
                         n_tokens=50257,
                         te_name='wte.weight',
@@ -120,6 +121,7 @@ print(output_text)
 # [half] move out init_params
 # input/output shapes in config
 # [done] fix layernorm issue: clever loading
-# make dyn a config instead of separate function
-# compare with pico to fix stuff
+# [done] make dyn a config instead of separate function
+# [done] compare with pico to fix stuff
 # change name to save_name
+# investigate ffn residual (make good visualizations)

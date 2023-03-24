@@ -98,7 +98,7 @@ class LN:
         eps: Optional[float] = None
         # all the other dimensions are normalized
         norm_dims: Optional[tuple[int, ...]] = None
-        x_shape: Optional[tuple[int, ...]] = None
+        x_shape: Optional[tuple[Optional[int], ...]] = None
         w_name: str = "w"
         b_name: str = "b"
         w_init: Literal[0] = 0
@@ -122,6 +122,7 @@ class LN:
             assert self.x_shape is not None, 'x_shape must be specified'
             assert self.eps is not None, 'eps must be specified'
             non_norm_shape = tuple(self.x_shape[i] for i in range(len(self.x_shape)) if i not in self.norm_dims)
+            non_norm_shape = cast(tuple[int, ...], non_norm_shape)
             return dict(
                 w=WeightConfig(
                     name=self.w_name,
