@@ -61,8 +61,9 @@ WeightConfigDict = dict[str, WeightConfig]
 PartsDict = dict[str, Union[ModuleConfig, List[ModuleConfig]]]
 
 
-def config_weights_check_(config: ModuleConfig, weights: WeightsTree) -> None:
+def config_weights_check(config: ModuleConfig, weights: WeightsTree) -> WeightsTree:
     try:
+        checked_w: WeightsTree = {}
         assert isinstance(weights, dict), f"weights for {config.name} module is not a dict: {type(weights)}"
         for name, part_config in config.parts.items():
             if name not in weights:
@@ -71,38 +72,58 @@ def config_weights_check_(config: ModuleConfig, weights: WeightsTree) -> None:
             if isinstance(part_config, ModuleConfig):
                 if not isinstance(w, dict):
                     raise ValueError(f"weights for {config.name} module is not a dict: {type(w)}")
-                config_weights_check_(part_config, w)
+                checked_w[name] = config_weights_check(part_config, w)
             else:
                 err_msg = f"Config {config.name} should be a ModuleConfig or a non-empty list of ModuleConfigs, got {part_config}"
                 assert isinstance(part_config, list), err_msg
                 assert len(part_config) > 0, err_msg
                 if len(part_config) != len(w):
-                    raise ValueError(f"Wrong number of weights in list {name}: weight {len(w)} != config {len(part_config)}")
+                    raise ValueError(
+                        f"Wrong number of weights in list {name}: weight {len(w)} != config {len(part_config)}")
                 assert isinstance(part_config[0], ModuleConfig), err_msg
                 if not isinstance(w, list):
                     raise ValueError(f"weights for {name} module is not a list: {type(w)}")
                 else:
-                    for i, part in enumerate(part_config):
-                        config_weights_check_(part, cast(WeightsTree, w[i]))
-        weights_check_(config.weights, weights)
+                    checked_w[name] = [config_weights_check(part, cast(WeightsTree, w[i]))
+                                       for i, part in enumerate(part_config)]
+        checked_w.update(weights_check(config.weights, weights))
+        return checked_w
     except ValueError as e:
         raise ValueError(f"Config Weights check failed for {config.name}") from e
 
 
-def weights_check_(weights_config: WeightConfigDict, weights: WeightsTree) -> None:
-    for name, config in weights_config.items():
-        assert isinstance(config, WeightConfig)
-        weight_check_(config, name, weights)
+def weights_check(weights_config: WeightConfigDict, weights: WeightsTree) -> WeightsTree:
+    try:
+        w: WeightsTree = {}
+        for name, config in weights_config.items():
+            assert isinstance(config, WeightConfig)
+            w[name] = weight_check(config, name, weights)
+        return w
+    except ValueError as e:
+        raise ValueError(f"Weights check failed for {weights_config}") from e
 
 
-def weight_check_(config: WeightConfig, name: str, weights: WeightsTree) -> None:
+def squeeze_side(s: tuple[int, ...]) -> tuple[int, ...]:
+    assert len(s) > 0, "Empty shape cannot be squeezed"
+    if len(s) == 1:
+        return s
+    if s[0] == 1:
+        return squeeze_side(s[1:])
+    if s[-1] == 1:
+        return squeeze_side(s[:-1])
+    return s
+
+
+def weight_check(config: WeightConfig, name: str, weights: WeightsTree) -> Arr:
     if name not in weights:
         raise ValueError(f"Missing weight {name}")
     w = weights[name]
     if not isinstance(w, Arr):
         raise ValueError(f"weight {name} is not an array: {type(w)}")
-    if w.shape != config.shape:
-        raise ValueError(f"Wrong shape for weight {name}: {w.shape} != {config.shape}")
+    if squeeze_side(w.shape) != squeeze_side(config.shape):
+        raise ValueError(f"Shape for weight {name} does not match: {w.shape} != {config.shape}")
+    else:
+        return w.reshape(config.shape)
 
 
 def load_config(config: ModuleConfig, weights_getter: Callable[[str], Arr], prefix: str = "") -> WeightsTree:
@@ -129,6 +150,7 @@ def load_weights(weight_configs: WeightConfigDict, weights_getter: Callable[[str
                  prefix: str = "") -> WeightsTree:
     weights: WeightsTree = {}
     for name, weight_config in weight_configs.items():
-        assert isinstance(weight_config, WeightConfig), f"weight_config {name} is not a WeightConfig, but {type(weight_config)}"
+        assert isinstance(weight_config,
+                          WeightConfig), f"weight_config {name} is not a WeightConfig, but {type(weight_config)}"
         weights[name] = weights_getter(f"{prefix}{weight_config.name}")
     return weights
