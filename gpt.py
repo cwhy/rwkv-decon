@@ -7,7 +7,7 @@ from typing import NamedTuple, Optional, cast, TypedDict, List, Literal, Union
 from chex import assert_shape
 from einops import rearrange
 from jax import numpy as jnp
-from jax._src.nn.functions import softmax
+from jax.nn import softmax
 from jax.experimental.maps import xmap
 
 from clean_frame import Linear, for_all_T, gelu, LN
@@ -249,7 +249,19 @@ class GptBlock:
         assert_shape(x, (self.T, self.n_channels))
         x += self.mha.f(w['mha'], self.ln1f(w['ln1'], x))
         x += self.ffnf(w['ffn'], self.ln2f(w['ln2'], x))
+        assert_shape(x, (self.T, self.n_channels))
+        return x
 
+    def f_debug(self, w: GptBlock.Weights, x: Arr) -> Arr:
+        assert_shape(x, (self.T, self.n_channels))
+        x0 = x
+        x = self.ln1f(w['ln1'], x)
+        x = self.mha.f(w['mha'], x)
+        x = x0 + x
+        x0 = x
+        x = self.ln2f(w['ln2'], x)
+        x = self.ffnf(w['ffn'], x)
+        x = x0 + x
         assert_shape(x, (self.T, self.n_channels))
         return x
 
@@ -307,11 +319,22 @@ class GptDecoder:
         self.n_channels = config.n_channels
         self.blocks = [config.blocks.make() for _ in range(config.n_blocks)]
 
-    def f(self, w: GptDecoder.Weights, x: Arr) -> Arr:
+    def f_ori(self, w: GptDecoder.Weights, x: Arr) -> Arr:
         assert_shape(x, (self.T, self.n_channels))
         for blk, blk_w in zip(self.blocks, w['blocks']):
             x = blk.f(blk_w, x)
         assert_shape(x, (self.T, self.n_channels))
+        return x
+
+    def f(self, w: GptDecoder.Weights, x: Arr) -> Arr:
+        assert_shape(x, (self.T, self.n_channels))
+        view_vec = []
+        for blk, blk_w in zip(self.blocks, w['blocks']):
+            x = blk.f(blk_w, x)
+            view_vec.append(x)
+        assert_shape(x, (self.T, self.n_channels))
+        jnp.save('view_vec2_step1', jnp.stack(view_vec, axis=0))
+        raise Exception('stop')
         return x
 
 

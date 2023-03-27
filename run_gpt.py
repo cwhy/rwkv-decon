@@ -109,11 +109,14 @@ def generate(inputs, n_tokens_to_generate):
 
 encoder = get_encoder("gpt2", "/Data/lm_models/", "vocab.json", "merges.txt")
 
-prompt = "Alan Turing theorized that computers would one day become"
+# prompt = "Alan Turing theorized that computers would one day become"
+prompt = "Time flies like an arrow; fruit flies like a banana."
+# prompt = "The number of pixels used to render an image is set by the Axes size and the dpi of the figure. This can lead to aliasing artifacts when the image is resampled because the displayed image size will usually not match the size of X (see Image antialiasing)."
 input_ids = encoder.encode(prompt)
+print([encoder.decoder[t] for t in input_ids])
+
 output_ids = generate(input_ids, 8)
 output_text = encoder.decode(output_ids)
-print(output_text)
 
 # TODO:
 # [done] implement weight check to parse a weight tree to proper weights
