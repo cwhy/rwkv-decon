@@ -17,18 +17,18 @@ prompt = "Time flies like an arrow ; fruit flies like a banana . Time files like
 token_list = prompt.split(" ")
 token_list = [str(i).zfill(2) + "_" + token for i, token in enumerate(token_list)]
 
-# view_vec = np.stack([bf_layer, aft_layer]).reshape((-1, len(token_list), 768))
-view_vec = bf_layer
+view_vec = np.stack([bf_layer, aft_layer]).reshape((-1, len(token_list), 768), order='F')
+# view_vec = bf_layer
 
 n_layers, n_tokens, n_channels = view_vec.shape
 assert n_tokens == len(token_list)
 all_vecs = view_vec.reshape(-1, n_channels)
 # all_vecs = view_vec[:-1, :, :].reshape(-1, n_channels)
 # n_layers = n_layers - 1
-# embedding = PaCMAP(n_components=2, n_neighbors=None, MN_ratio=0.5, FP_ratio=2.0)
-# embedding = UMAP(n_neighbors=10, metric='cosine')
+# embedding = PaCMAP(distance='angular', n_components=2, n_neighbors=None, MN_ratio=0.5, FP_ratio=2.0)
+embedding = UMAP(n_neighbors=10, metric='cosine')
 # embedding = TRIMAP(distance='cosine')
-embedding = TSNE(n_components=2, learning_rate='auto', init='random', perplexity=3, metric='cosine')
+# embedding = TSNE(n_components=2, learning_rate='auto', init='random', perplexity=3, metric='cosine')
 new = embedding.fit_transform(all_vecs)
 new = np.concatenate([new, np.array([np.repeat(i, n_tokens) for i in range(n_layers)]).reshape(-1, 1),
                       np.array([np.arange(n_tokens) for i in range(n_layers)]).reshape(-1, 1)], axis=1)
