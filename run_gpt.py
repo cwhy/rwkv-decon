@@ -95,7 +95,7 @@ checked_weights = gpt_config.weights_check(weights_tree_)
 
 
 def run(inputs):
-    return gpt_.f_dyn(checked_weights, jnp.array(inputs))
+    return gpt_.f_debug(checked_weights, jnp.array(inputs), save_dir="saves")
 
 
 def generate(inputs, n_tokens_to_generate):
@@ -110,7 +110,8 @@ def generate(inputs, n_tokens_to_generate):
 encoder = get_encoder("gpt2", "/Data/lm_models/", "vocab.json", "merges.txt")
 
 # prompt = "Alan Turing theorized that computers would one day become"
-prompt = "Time flies like an arrow; fruit flies like a banana."
+prompt = "Time flies like an arrow, fruit flies like a banana. Time flies like an"
+# prompt = "Time flies like an arrow; fruit flies like a banana."
 # prompt = "The number of pixels used to render an image is set by the Axes size and the dpi of the figure. This can lead to aliasing artifacts when the image is resampled because the displayed image size will usually not match the size of X (see Image antialiasing)."
 input_ids = encoder.encode(prompt)
 print([encoder.decoder[t] for t in input_ids])
@@ -127,4 +128,7 @@ output_text = encoder.decode(output_ids)
 # [done] make dyn a config instead of separate function
 # [done] compare with pico to fix stuff
 # change name to save_name
-# investigate ffn residual (make good visualizations)
+# [half] investigate ffn residual (make good visualizations)
+# complete the debug_train
+# make view panel
+# better folder structure

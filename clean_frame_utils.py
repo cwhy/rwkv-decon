@@ -19,14 +19,6 @@ class WeightConfig(NamedTuple):
     scale: float = 1
 
 
-class NNModule(Protocol):
-    def __init__(self, config: NamedTuple):
-        ...
-
-    def f(self, w: dict, x: Arr) -> Arr:
-        ...
-
-
 @runtime
 class ModuleConfig(Protocol):
     @property

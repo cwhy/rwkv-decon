@@ -17,36 +17,6 @@ from clean_frame_utils import check_config, WeightConfigDict, PartsDict, Weights
 
 
 class GptMha:
-    class Weights(TypedDict):
-        QKV_linear: Linear.Weights
-        linear: Linear.Weights
-
-    def causal_dot_attention(self, q: Arr, k: Arr, v: Arr) -> Arr:
-        assert_shape([q, k, v], (self.T, self.dim_heads))
-        mask = self.get_mask(q.shape[0])
-        result = softmax((q @ k.T) / self.scale + mask) @ v
-        assert_shape(result, (self.T, self.dim_heads))
-        return result
-
-    def f(self, w: GptMha.Weights, x: Arr) -> Arr:
-        assert_shape(x, (self.T, self.n_channels))
-
-        q, k, v = rearrange(self.QKV_linearf(w['QKV_linear'], x),
-                            'T (qkv n_heads dim_heads) -> qkv n_heads T dim_heads',
-                            qkv=3,
-                            n_heads=self.n_heads,
-                            dim_heads=self.dim_heads)
-        extension_shape = ['n_head', ...]
-        attended = xmap(self.causal_dot_attention, [extension_shape] * 3, extension_shape)(q, k, v)
-        assert_shape(attended, (self.n_heads, self.T, self.dim_heads))
-        concatenated = jnp.concatenate(attended, -1)
-        assert_shape(concatenated, (self.T, self.n_channels))
-
-        result = self.linearf(w['linear'], concatenated)
-
-        assert_shape(result, (self.T, self.n_channels))
-        return result
-
     class Config(NamedTuple):
         n_channels: Optional[int] = None
         n_heads: Optional[int] = None
@@ -96,6 +66,10 @@ class GptMha:
         def weights_check(self, w: WeightsTree) -> GptMha.Weights:
             return cast(GptMha.Weights, config_weights_check(self, w))
 
+    class Weights(TypedDict):
+        QKV_linear: Linear.Weights
+        linear: Linear.Weights
+
     def __init__(self, config: Config):
         assert config.n_channels is not None
         assert config.n_heads is not None
@@ -118,16 +92,6 @@ class GptMha:
 
 
 class GptFfn:
-    class Weights(TypedDict):
-        linear1: Linear.Weights
-        linear2: Linear.Weights
-
-    def f(self, w: GptFfn.Weights, x: Arr) -> Arr:
-        assert_shape(x, (self.n_channels,))
-        result = self.linear2.f(w['linear2'], gelu(self.linear1.f(w['linear1'], x)))
-        assert_shape(result, (self.n_channels,))
-        return result
-
     class Config(NamedTuple):
         n_channels: Optional[int] = None
         n_seq: Optional[Union[int, Literal['dynamic']]] = None
@@ -169,6 +133,10 @@ class GptFfn:
         def weights_check(self, w: WeightsTree) -> GptFfn.Weights:
             return cast(GptFfn.Weights, config_weights_check(self, w))
 
+    class Weights(TypedDict):
+        linear1: Linear.Weights
+        linear2: Linear.Weights
+
     def __init__(self, config: Config):
         self.n_channels = config.n_channels
         self.linear1 = config.linear1.make()
@@ -176,36 +144,6 @@ class GptFfn:
 
 
 class GptBlock:
-    class Weights(TypedDict):
-        mha: GptMha.Weights
-        ffn: GptFfn.Weights
-        ln1: LN.Weights
-        ln2: LN.Weights
-
-    def f(self, w: GptBlock.Weights, x: Arr) -> Arr:
-        assert_shape(x, (self.T, self.n_channels))
-        x += self.mha.f(w['mha'], self.ln1f(w['ln1'], x))
-        x += self.ffnf(w['ffn'], self.ln2f(w['ln2'], x))
-        assert_shape(x, (self.T, self.n_channels))
-        return x
-
-    def f_debug(self, w: GptBlock.Weights, x: Arr) -> dict[str, Arr]:
-        return_dict = {}
-        x0 = x
-        x = self.ln1f(w['ln1'], x)
-        return_dict['x_before_mha'] = x
-        x = self.mha.f(w['mha'], x)
-        return_dict['x_after_mha'] = x
-        x = x0 + x
-        x0 = x
-        x = self.ln2f(w['ln2'], x)
-        return_dict['x_before_ffn'] = x
-        x = self.ffnf(w['ffn'], x)
-        return_dict['x_after_ffn'] = x
-        x = x0 + x
-        return_dict['x'] = x
-        return return_dict
-
     class Config(NamedTuple):
         eps: Optional[float] = None
         n_channels: Optional[int] = None
@@ -258,6 +196,12 @@ class GptBlock:
         def weights_check(self, w: WeightsTree) -> GptBlock.Weights:
             return cast(GptBlock.Weights, config_weights_check(self, w))
 
+    class Weights(TypedDict):
+        mha: GptMha.Weights
+        ffn: GptFfn.Weights
+        ln1: LN.Weights
+        ln2: LN.Weights
+
     def __init__(self, config: Config):
         self.T = config.T
         self.n_channels = config.n_channels
@@ -271,30 +215,8 @@ class GptBlock:
         self.ln2f = self.ln2.f
 
 
+
 class GptDecoder:
-    class Weights(TypedDict):
-        blocks: List[GptBlock.Weights]
-
-    def f(self, w: GptDecoder.Weights, x: Arr) -> Arr:
-        assert_shape(x, (self.T, self.n_channels))
-        for blk, blk_w in zip(self.blocks, w['blocks']):
-            x = blk.f(blk_w, x)
-        assert_shape(x, (self.T, self.n_channels))
-        return x
-
-    def f_debug(self, w: GptDecoder.Weights, x: Arr, save_dir: str) -> Arr:
-        assert_shape(x, (self.T, self.n_channels))
-        view_vec = []
-        for blk, blk_w in zip(self.blocks, w['blocks']):
-            return_dict = blk.f_debug(blk_w, x)
-            view_vec.append(return_dict)
-            x = return_dict['x']
-        assert_shape(x, (self.T, self.n_channels))
-        vecs = {key: jnp.stack([dict_item[key] for dict_item in view_vec]) for key in view_vec[0].keys()}
-        save_file(vecs, f'{save_dir}/view_vec2_dict')
-        raise Exception('stop')
-        return x
-
     class Config(NamedTuple):
         eps: Optional[float] = None
         n_channels: Optional[int] = None
@@ -338,6 +260,9 @@ class GptDecoder:
         def weights_check(self, w: WeightsTree) -> GptDecoder.Weights:
             return cast(GptDecoder.Weights, config_weights_check(self, w))
 
+    class Weights(TypedDict):
+        blocks: List[GptBlock.Weights]
+
     def __init__(self, config: Config):
         assert config.n_blocks is not None
         self.T = config.T
@@ -345,30 +270,8 @@ class GptDecoder:
         self.blocks = [config.blocks.make() for _ in range(config.n_blocks)]
 
 
+
 class Gpt:
-    class Weights(TypedDict):
-        token_embedding: Arr
-        positional_encoding: Arr
-        decoder: GptDecoder.Weights
-        ln: LN.Weights
-
-    def f(self, w: Gpt.Weights, x: Arr) -> Arr:
-        assert_shape(x, (self.T,))
-        # remove x.shape[0] for faster but static seq len
-        x = w['token_embedding'][x, :] + w['positional_encoding'][:x.shape[0], :]
-        assert_shape(x, (self.T, self.n_channels))
-        result = self.ln.f(w['ln'], self.decoder.f(w['decoder'], x))
-        assert_shape(result, (self.T, self.n_channels))
-        return result
-
-    def f_debug(self, w: Gpt.Weights, x: Arr, save_dir: str) -> Arr:
-        assert_shape(x, (self.T,))
-        x = w['token_embedding'][x, :] + w['positional_encoding'][:x.shape[0], :]
-        assert_shape(x, (self.T, self.n_channels))
-        result = self.ln.f(w['ln'], self.decoder.f_debug(w['decoder'], x, save_dir))
-        assert_shape(result, (self.T, self.n_channels))
-        return result
-
     class Config(NamedTuple):
         eps: Optional[float] = None
         n_channels: Optional[int] = None
@@ -449,3 +352,4 @@ class Gpt:
         self.eps = config.eps
         self.decoder = config.decoder.make()
         self.ln = config.ln.make()
+
