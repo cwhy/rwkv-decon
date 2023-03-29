@@ -359,7 +359,7 @@ class Gpt:
         assert_shape(x, (self.T, self.n_channels))
         result = self.ln.f(w['ln'], self.decoder.f(w['decoder'], x))
         assert_shape(result, (self.T, self.n_channels))
-        return result
+        return result @ w['token_embedding'].T
 
     def f_debug(self, w: Gpt.Weights, x: Arr, save_dir: str) -> Arr:
         assert_shape(x, (self.T,))
@@ -367,7 +367,7 @@ class Gpt:
         assert_shape(x, (self.T, self.n_channels))
         result = self.ln.f(w['ln'], self.decoder.f_debug(w['decoder'], x, save_dir))
         assert_shape(result, (self.T, self.n_channels))
-        return result
+        return result @ w['token_embedding'].T
 
     class Config(NamedTuple):
         eps: Optional[float] = None

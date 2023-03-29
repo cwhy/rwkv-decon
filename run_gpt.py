@@ -95,7 +95,8 @@ checked_weights = gpt_config.weights_check(weights_tree_)
 
 
 def run(inputs):
-    return gpt_.f_debug(checked_weights, jnp.array(inputs), save_dir="saves")
+    # return gpt_.f_debug(checked_weights, jnp.array(inputs), save_dir="saves")
+    return gpt_.f(checked_weights, jnp.array(inputs))
 
 
 def generate(inputs, n_tokens_to_generate):
@@ -118,6 +119,7 @@ print([encoder.decoder[t] for t in input_ids])
 
 output_ids = generate(input_ids, 8)
 output_text = encoder.decode(output_ids)
+print(output_text)
 
 # TODO:
 # [done] implement weight check to parse a weight tree to proper weights
