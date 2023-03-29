@@ -1,10 +1,7 @@
 import altair as alt
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import safetensors.flax
-from numpy.typing import NDArray
-from sklearn.cluster import AgglomerativeClustering
 from sklearn.manifold import TSNE
 
 alt.renderers.enable('svg')

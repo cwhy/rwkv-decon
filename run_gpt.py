@@ -95,13 +95,17 @@ checked_weights = gpt_config.weights_check(weights_tree_)
 
 
 def run(inputs):
-    # return gpt_.f_debug(checked_weights, jnp.array(inputs), save_dir="saves")
     return gpt_.f(checked_weights, jnp.array(inputs))
+
+
+def debug(inputs):
+    return gpt_.f_debug(checked_weights, jnp.array(inputs), save_dir="saves")
 
 
 def generate(inputs, n_tokens_to_generate):
     for _ in tqdm(range(n_tokens_to_generate), "generating"):  # auto-regressive decode loop
-        logits = run(inputs)
+        # logits = run(inputs)
+        logits = debug(inputs)
         next_id = jnp.argmax(logits[-1])  # greedy sampling
         inputs.append(int(next_id))  # append prediction to input
 
