@@ -26,9 +26,9 @@ all_vecs = view_vec.reshape(-1, n_channels)
 # all_vecs = view_vec[:-1, :, :].reshape(-1, n_channels)
 # n_layers = n_layers - 1
 # embedding = PaCMAP(n_components=2, n_neighbors=None, MN_ratio=0.5, FP_ratio=2.0)
-embedding = UMAP(n_neighbors=10, metric='cosine')
-# embedding = TRIMAP()
-# embedding = TSNE(n_components=2, learning_rate='auto', init='random', perplexity=3, metric='cosine')
+# embedding = UMAP(n_neighbors=10, metric='cosine')
+# embedding = TRIMAP(distance='cosine')
+embedding = TSNE(n_components=2, learning_rate='auto', init='random', perplexity=3, metric='cosine')
 new = embedding.fit_transform(all_vecs)
 new = np.concatenate([new, np.array([np.repeat(i, n_tokens) for i in range(n_layers)]).reshape(-1, 1),
                       np.array([np.arange(n_tokens) for i in range(n_layers)]).reshape(-1, 1)], axis=1)
@@ -36,12 +36,27 @@ new = np.concatenate([new, np.array([np.repeat(i, n_tokens) for i in range(n_lay
 source = pd.DataFrame(new, columns=['x', 'y', 'layer', 'token'])
 source['token'] = source['token'].apply(lambda x: token_list[int(x)])
 source['layer'] = source['layer'].apply(lambda x: int(x))
-alt.Chart(source).mark_circle().encode(
+
+lines_all = []
+for i in range(n_tokens):
+    t = source[source['token'] == token_list[i]]
+    lines = alt.Chart(t).mark_line().encode(
+        x='x',
+        y='y',
+        order='layer',
+        color=alt.value("#AAAAAA")
+    )
+    lines_all.append(lines)
+
+dots = alt.Chart(source).mark_circle().encode(
     x='x',
     y='y',
     size=alt.Size('layer', legend=alt.Legend(type="symbol", symbolLimit=0), type='ordinal'),
     # rainbow
     color=alt.Color('token', scale=alt.Scale(scheme='rainbow'), legend=alt.Legend(type="symbol", symbolLimit=0)),
-).properties(width=1000, height=1000).save('chart4.svg')
+).properties(width=1000, height=1000)
+
+final = sum(lines_all, alt.LayerChart()) + dots
+final.save('lines.svg')
 
 # TSNE without first layer
