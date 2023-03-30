@@ -315,7 +315,7 @@ class GptDecoder:
         assert_shape(x, (self.T, self.n_channels))
         return x
 
-    def f_debug(self, w: GptDecoder.Weights, x: Arr, save_dir: str) -> Arr:
+    def f_debug(self, w: GptDecoder.Weights, x: Arr) -> tuple[Arr, dict[str, Arr]]:
         assert_shape(x, (self.T, self.n_channels))
         view_vec = []
         for blk, blk_w in zip(self.blocks, w['blocks']):
@@ -324,9 +324,7 @@ class GptDecoder:
             x = return_dict['x']
         assert_shape(x, (self.T, self.n_channels))
         vecs = {key: jnp.stack([dict_item[key] for dict_item in view_vec]) for key in view_vec[0].keys()}
-        save_file(vecs, f'{save_dir}/view_vec2_dict')
-        raise Exception('stop')
-        return x
+        return x, vecs
 
     class Config(NamedTuple):
         eps: Optional[float] = None
@@ -394,13 +392,14 @@ class Gpt:
         assert_shape(result, (self.T, self.n_channels))
         return result @ w['token_embedding'].T
 
-    def f_debug(self, w: Gpt.Weights, x: Arr, save_dir: str) -> Arr:
+    def f_debug(self, w: Gpt.Weights, x: Arr) -> tuple[Arr, dict[str, Arr]]:
         assert_shape(x, (self.T,))
         x = w['token_embedding'][x, :] + w['positional_encoding'][:x.shape[0], :]
         assert_shape(x, (self.T, self.n_channels))
-        result = self.ln.f(w['ln'], self.decoder.f_debug(w['decoder'], x, save_dir))
+        decoder_out, save_vecs = self.decoder.f_debug(w['decoder'], x)
+        result = self.ln.f(w['ln'], decoder_out)
         assert_shape(result, (self.T, self.n_channels))
-        return result @ w['token_embedding'].T
+        return result @ w['token_embedding'].T, save_vecs
 
     class Config(NamedTuple):
         eps: Optional[float] = None

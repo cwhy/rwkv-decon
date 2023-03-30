@@ -10,7 +10,7 @@ from trimap import TRIMAP
 alt.renderers.enable('svg')
 
 
-view_vec_dict = safetensors.safe_open('saves/view_vec2_dict', 'flax')
+view_vec_dict = safetensors.safe_open('saves/view_vec2_dict_new', 'flax')
 bf_layer = view_vec_dict.get_tensor('x0')
 # mid_layer = view_vec_dict.get_tensor('x_after_mha')
 mid_layer = view_vec_dict.get_tensor('x_before_ffn')

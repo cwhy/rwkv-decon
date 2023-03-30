@@ -9,6 +9,8 @@ from optax import softmax_cross_entropy_with_integer_labels
 from safetensors import safe_open
 from pathlib import Path
 
+from safetensors.flax import save_file
+
 from bpe_encoder import get_encoder
 from clean_frame import LN, Linear
 from gpt import GptMha, GptFfn, GptBlock, GptDecoder, Gpt
@@ -98,14 +100,17 @@ def run(inputs):
     return gpt_.f(checked_weights, jnp.array(inputs))
 
 
-def debug(inputs):
-    return gpt_.f_debug(checked_weights, jnp.array(inputs), save_dir="saves")
+def debug(inputs) -> dict[str, Arr]:
+    logits, to_save = gpt_.f_debug(checked_weights, jnp.array(inputs))
+    out = encoder.decode([int(jnp.argmax(logits[-1]))])
+    print(out)
+    save_dir = "saves"
+    return save_file(to_save, f'{save_dir}/view_vec2_dict_new')
 
 
 def generate(inputs, n_tokens_to_generate):
     for _ in tqdm(range(n_tokens_to_generate), "generating"):  # auto-regressive decode loop
-        # logits = run(inputs)
-        logits = debug(inputs)
+        logits = run(inputs)
         next_id = jnp.argmax(logits[-1])  # greedy sampling
         inputs.append(int(next_id))  # append prediction to input
 
@@ -121,9 +126,11 @@ prompt = "Time flies like an arrow, fruit flies like a banana. Time flies like a
 input_ids = encoder.encode(prompt)
 print([encoder.decoder[t] for t in input_ids])
 
-output_ids = generate(input_ids, 8)
-output_text = encoder.decode(output_ids)
-print(output_text)
+debug(input_ids)
+
+# output_ids = generate(input_ids, 8)
+# output_text = encoder.decode(output_ids)
+# print(output_text)
 
 # TODO:
 # [done] implement weight check to parse a weight tree to proper weights
