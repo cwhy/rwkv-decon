@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 import jax.numpy as jnp
+from jax import jit
 from optax import softmax_cross_entropy_with_integer_labels
 
 from safetensors import safe_open
@@ -101,11 +102,11 @@ def run(inputs):
 
 
 def debug(inputs) -> dict[str, Arr]:
-    logits, to_save = gpt_.f_debug(checked_weights, jnp.array(inputs))
+    logits, to_save = jit(gpt_.f_debug)(checked_weights, jnp.array(inputs))
     out = encoder.decode([int(jnp.argmax(logits[-1]))])
     print(out)
     save_dir = "saves"
-    return save_file(to_save, f'{save_dir}/view_vec2_dict_new')
+    return save_file(to_save, f'{save_dir}/view_vec2_dict_jit')
 
 
 def generate(inputs, n_tokens_to_generate):
