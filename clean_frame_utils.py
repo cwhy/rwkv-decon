@@ -6,6 +6,9 @@ from typing import NamedTuple, TypeVar, List, Union, Literal, Protocol, Mapping,
 
 import jax
 from typing_extensions import runtime
+import jax.numpy as jnp
+
+from jax_init_utils import kaiming_init, embedding_init, normal_init, dropout_gen, RNGKey
 
 ArrayGen = Literal['kaiming', 'dropout', 'embedding', 'normal']
 Arr = jax.Array
@@ -17,6 +20,20 @@ class WeightConfig(NamedTuple):
     shape: tuple[int, ...]
     init: Union[ArrayGen, int, float] = "kaiming"
     scale: float = 1
+
+    def make(self, rng_key: RNGKey) -> Arr:
+        if isinstance(self.init, int) or isinstance(self.init, float):
+            return jnp.full(self.shape, float(self.init))
+        elif self.init == 'kaiming':
+            return kaiming_init(rng_key, self.scale, self.shape)
+        elif self.init == 'embedding':
+            return embedding_init(rng_key, self.scale, self.shape)
+        elif self.init == 'normal':
+            return normal_init(rng_key, self.scale, self.shape)
+        elif self.init == 'dropout':
+            return dropout_gen(rng_key, self.scale, self.shape)
+        else:
+            raise NotImplementedError("unsupported init type")
 
 
 @runtime

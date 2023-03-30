@@ -5,7 +5,6 @@ from collections import defaultdict
 
 import jax.numpy as jnp
 from jax import jit
-from optax import softmax_cross_entropy_with_integer_labels
 
 from safetensors import safe_open
 from pathlib import Path
@@ -18,33 +17,6 @@ from gpt import GptMha, GptFfn, GptBlock, GptDecoder, Gpt
 from clean_frame_utils import Arr, load_config
 from tqdm import tqdm
 
-basic = False
-if basic:
-    def gpt_loss(gpt: Gpt, inputs: list[int], labels: list[int]) -> Arr:
-        logits = go(gpt, (jnp.array(inputs)))
-        return softmax_cross_entropy_with_integer_labels(logits, jnp.array(labels))
-
-
-    def go(c, x: Arr) -> Arr:
-        return c.f(c.init_params(), x)
-
-
-    kkk = go(GptMha.Config(n_channels=9,
-                           n_heads=3,
-                           T=5).make(), jnp.ones((5, 9)))
-
-    print(kkk.shape)
-    gpt_ = Gpt.Config(eps=1e-5,
-                      n_channels=9,
-                      n_heads=3,
-                      T=5,
-                      n_blocks=2,
-                      n_tokens=10).make()
-    zz = go(gpt_, jnp.ones((5,), dtype=jnp.int32))
-
-    print(zz.shape)
-    print(gpt_loss(gpt_, [1, 2, 3, 4, 5], [2, 3, 4, 5, 6]))
-    www = gpt_.init_params()
 
 gpt_config = Gpt.Config(eps=1e-5,
                         n_channels=768,
