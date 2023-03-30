@@ -47,6 +47,37 @@ class GptMha:
         assert_shape(result, (self.T, self.n_channels))
         return result
 
+    def f_debug(self, w: GptMha.Weights, x: Arr) -> dict[str, Arr]:
+        assert_shape(x, (self.T, self.n_channels))
+
+        qs, ks, vs = rearrange(self.QKV_linearf(w['QKV_linear'], x),
+                               'T (qkv n_heads dim_heads) -> qkv n_heads T dim_heads',
+                               qkv=3,
+                               n_heads=self.n_heads,
+                               dim_heads=self.dim_heads)
+        mask = self.get_mask(qs.shape[1])
+        attended_list = []
+        attn_maps = []
+        attn_maps_raw = []
+        for q, k, v in zip(qs, ks, vs):
+            attn_map_raw = q @ k.T
+            attn_maps_raw.append(attn_map_raw)
+            attn_map = softmax(attn_map_raw / self.scale + mask)
+            attn_maps.append(attn_map)
+            attended_list.append(attn_map @ v)
+        attended = jnp.stack(attended_list)
+        assert_shape(attended, (self.n_heads, self.T, self.dim_heads))
+        concatenated = jnp.concatenate(attended, -1)
+        assert_shape(concatenated, (self.T, self.n_channels))
+
+        result = self.linearf(w['linear'], concatenated)
+
+        assert_shape(result, (self.T, self.n_channels))
+        return dict(
+            attn=jnp.stack(attn_maps),
+            attn_raw=jnp.stack(attn_maps_raw),
+            x_after_mha=result)
+
     class Config(NamedTuple):
         n_channels: Optional[int] = None
         n_heads: Optional[int] = None
@@ -192,10 +223,12 @@ class GptBlock:
     def f_debug(self, w: GptBlock.Weights, x: Arr) -> dict[str, Arr]:
         return_dict = {}
         x0 = x
+        return_dict['x0'] = x
         x = self.ln1f(w['ln1'], x)
         return_dict['x_before_mha'] = x
-        x = self.mha.f(w['mha'], x)
-        return_dict['x_after_mha'] = x
+        attn_result = self.mha.f_debug(w['mha'], x)
+        return_dict.update(attn_result)
+        x = attn_result['x_after_mha']
         x = x0 + x
         x0 = x
         x = self.ln2f(w['ln2'], x)
