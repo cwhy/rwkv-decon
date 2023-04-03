@@ -97,13 +97,13 @@ debug(input_ids)
 # TODO:
 # [done] implement weight check to parse a weight tree to proper weights
 # make shape a dict
-# [half] move out init_params
+# [done] move out init_params
 # input/output shapes in config
 # [done] fix layernorm issue: clever loading
 # [done] make dyn a config instead of separate function
 # [done] compare with pico to fix stuff
 # change name to save_name
 # [half] investigate ffn residual (make good visualizations)
-# complete the debug_train
+# [done] complete the debug_chain
 # make view panel
-# better folder structure
+# [half] better folder structure

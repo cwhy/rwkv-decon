@@ -106,11 +106,11 @@ def estimate_loss(eval_iters: int,
 
 
 key_gen = infinite_safe_keys(0)
-max_iters = 15
+max_iters = 5
 eval_interval = 10
 learning_rate_ = 1e-4
 eval_iters = 200
-batch_config_ = BatchConfig(block_size=16, batch_size=32)
+batch_config_ = BatchConfig(block_size=16, batch_size=4)
 
 dataset = "english"
 # dataset = "play"
@@ -120,7 +120,7 @@ train_data = encoded_jax[:n]
 valid_data = encoded_jax[n:]
 
 gpt_config_ = Gpt.Config(eps=1e-5,
-                         n_channels=64,
+                         n_channels=32,
                          n_heads=4,
                          n_seq='dynamic',
                          max_seq_len=batch_config_.block_size,
@@ -156,3 +156,4 @@ with jax.profiler.trace("/tmp/jax-trace", create_perfetto_link=True):
             generated = gpt.generate(train_state_.f, [0], n_tokens_to_generate=10, max_len=batch_config_.block_size)
             print(decode(generated), flush=True)
 
+# TODO: fix profiling
