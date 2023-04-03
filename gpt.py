@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import math
 from functools import cache
-from typing import NamedTuple, Optional, cast, TypedDict, List, Literal, Union
+from typing import NamedTuple, Optional, cast, TypedDict, List, Literal, Union, Callable
 
 from chex import assert_shape
 from einops import rearrange
 from jax import numpy as jnp
-from jax.nn import softmax
 from jax.experimental.maps import xmap
-from safetensors.flax import save_file
+from jax.nn import softmax
+from tqdm import tqdm
 
 from clean_frame import Linear, for_all_T, gelu, LN
 from clean_frame_utils import check_config, WeightConfigDict, PartsDict, WeightsTree, config_weights_check, Arr, \
@@ -86,7 +86,7 @@ class GptMha:
         linear: Linear.Config = Linear.Config()
         QKV_linear: Linear.Config = Linear.Config()
 
-        name: str = "mha"
+        save_name: str = "mha"
 
         @property
         @cache
@@ -164,7 +164,7 @@ class GptFfn:
         n_seq: Optional[Union[int, Literal['dynamic']]] = None
         linear1: Linear.Config = Linear.Config()
         linear2: Linear.Config = Linear.Config()
-        name: str = "ffn"
+        save_name: str = "ffn"
 
         @property
         @cache
@@ -248,7 +248,7 @@ class GptBlock:
         ffn: GptFfn.Config = GptFfn.Config()
         ln1: LN.Config = LN.Config()
         ln2: LN.Config = LN.Config()
-        name: str = "gpt_block"
+        save_name: str = "gpt_block"
 
         @property
         def T(self) -> Optional[int]:
@@ -334,7 +334,7 @@ class GptDecoder:
         n_blocks: Optional[int] = None
         blocks: GptBlock.Config = GptBlock.Config()
 
-        name: str = 'gpt_decoder'
+        save_name: str = 'gpt_decoder'
 
         @property
         @cache
@@ -410,16 +410,16 @@ class Gpt:
         n_tokens: Optional[int] = None
         max_seq_len: Optional[int] = None
 
-        te_name: str = 'te'
-        te_init: Literal['normal'] = 'normal'
-        te_scale: float = 0.02
+        token_embedding_save_name: str = 'te'
+        token_embedding_init: Literal['normal'] = 'normal'
+        token_embedding_scale: float = 0.02
 
         decoder: GptDecoder.Config = GptDecoder.Config()
         ln: LN.Config = LN.Config()
 
-        pe_name: str = 'pe'
+        positional_embedding_save_name: str = 'pe'
 
-        name: str = 'gpt'
+        save_name: str = 'gpt'
 
         @property
         def T(self) -> Optional[int]:
@@ -448,12 +448,12 @@ class Gpt:
             assert filled.n_tokens is not None
             assert filled.n_channels is not None
             return dict(
-                token_embedding=WeightConfig(name=filled.te_name,
-                                             init=filled.te_init,
+                token_embedding=WeightConfig(save_name=filled.token_embedding_save_name,
+                                             init=filled.token_embedding_init,
                                              shape=(filled.n_tokens, filled.n_channels),
-                                             scale=filled.te_scale),
+                                             scale=filled.token_embedding_scale),
 
-                positional_encoding=WeightConfig(name=filled.pe_name,
+                positional_encoding=WeightConfig(save_name=filled.positional_embedding_save_name,
                                                  shape=(filled.max_seq_len, filled.n_channels)),
             )
 
@@ -462,7 +462,7 @@ class Gpt:
             filled = self.fill()
             assert filled.decoder is not None
             assert filled.ln is not None
-            assert filled.te_name is not None
+            assert filled.token_embedding_save_name is not None
             return dict(
                 decoder=filled.decoder,
                 ln=filled.ln,
@@ -475,9 +475,21 @@ class Gpt:
         assert config.n_blocks is not None
         assert config.n_tokens is not None
         assert config.n_channels is not None
+        self.config = config
         self.T = config.T
         self.n_channels = config.n_channels
         self.n_tokens = config.n_tokens
         self.eps = config.eps
         self.decoder = config.decoder.make()
         self.ln = config.ln.make()
+
+
+def generate(get_logits: Callable[[Arr], Arr], inputs: list[int], n_tokens_to_generate: int, max_len: int):
+    input_window = inputs
+    for _ in tqdm(range(n_tokens_to_generate), "generating"):  # auto-regressive decode loop
+        logits = get_logits(jnp.array(input_window))
+        next_id = jnp.argmax(logits[-1])  # greedy sampling
+        inputs.append(int(next_id))  # append prediction to input
+        input_window = inputs[-max_len:]  # update input window
+
+    return inputs[len(inputs) - n_tokens_to_generate:]  # only return generated ids

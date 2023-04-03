@@ -13,10 +13,8 @@ from safetensors.flax import save_file
 
 from bpe_encoder import get_encoder
 from clean_frame import LN, Linear
-from gpt import GptMha, GptFfn, GptBlock, GptDecoder, Gpt
+from gpt import GptMha, GptFfn, GptBlock, GptDecoder, Gpt, generate
 from clean_frame_utils import Arr, load_config
-from tqdm import tqdm
-
 
 gpt_config = Gpt.Config(eps=1e-5,
                         n_channels=768,
@@ -25,26 +23,26 @@ gpt_config = Gpt.Config(eps=1e-5,
                         max_seq_len=1024,
                         n_blocks=12,
                         n_tokens=50257,
-                        te_name='wte.weight',
-                        pe_name='wpe.weight',
-                        ln=LN.Config(w_name='weight', b_name='bias', name='ln_f'),
-                        name="",
+                        token_embedding_save_name='wte.weight',
+                        positional_embedding_save_name='wpe.weight',
+                        ln=LN.Config(w_save_name='weight', b_save_name='bias', save_name='ln_f'),
+                        save_name="",
                         decoder=GptDecoder.Config(
-                            name='h',
+                            save_name='h',
                             blocks=GptBlock.Config(
-                                name="",
+                                save_name="",
                                 mha=GptMha.Config(
-                                    name='attn',
-                                    QKV_linear=Linear.Config(name='c_attn', w_name='weight', b_name='bias'),
-                                    linear=Linear.Config(name="c_proj", w_name='weight', b_name='bias'),
+                                    save_name='attn',
+                                    QKV_linear=Linear.Config(save_name='c_attn', w_save_name='weight', b_save_name='bias'),
+                                    linear=Linear.Config(save_name="c_proj", w_save_name='weight', b_save_name='bias'),
                                 ),
-                                ln1=LN.Config(w_name='weight', b_name='bias', name='ln_1'),
+                                ln1=LN.Config(w_save_name='weight', b_save_name='bias', save_name='ln_1'),
                                 ffn=GptFfn.Config(
-                                    name='mlp',
-                                    linear1=Linear.Config(w_name='weight', b_name='bias', name='c_fc'),
-                                    linear2=Linear.Config(w_name='weight', b_name='bias', name='c_proj'),
+                                    save_name='mlp',
+                                    linear1=Linear.Config(w_save_name='weight', b_save_name='bias', save_name='c_fc'),
+                                    linear2=Linear.Config(w_save_name='weight', b_save_name='bias', save_name='c_proj'),
                                 ),
-                                ln2=LN.Config(w_name='weight', b_name='bias', name='ln_2')
+                                ln2=LN.Config(w_save_name='weight', b_save_name='bias', save_name='ln_2')
                             )
                         )).fill()
 
@@ -81,15 +79,6 @@ def debug(inputs) -> dict[str, Arr]:
     return save_file(to_save, f'{save_dir}/view_vec2_dict_jit')
 
 
-def generate(inputs, n_tokens_to_generate):
-    for _ in tqdm(range(n_tokens_to_generate), "generating"):  # auto-regressive decode loop
-        logits = run(inputs)
-        next_id = jnp.argmax(logits[-1])  # greedy sampling
-        inputs.append(int(next_id))  # append prediction to input
-
-    return inputs[len(inputs) - n_tokens_to_generate:]  # only return generated ids
-
-
 encoder = get_encoder("gpt2", "/Data/lm_models/", "vocab.json", "merges.txt")
 
 # prompt = "Alan Turing theorized that computers would one day become"
@@ -101,7 +90,7 @@ print([encoder.decoder[t] for t in input_ids])
 
 debug(input_ids)
 
-# output_ids = generate(input_ids, 8)
+# output_ids = generate(run, input_ids, 8)
 # output_text = encoder.decode(output_ids)
 # print(output_text)
 

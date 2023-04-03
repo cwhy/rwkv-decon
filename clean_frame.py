@@ -18,20 +18,28 @@ W = TypeVar('W')
 # TODO: unify init_param
 # TODO: load real GPT weights
 
+
 def no_w(d: C) -> tuple[list, C]:
     return [...], d
 
 
-def batch_ops(f: Callable[[W, Arr], Arr], label: str, add_behind: bool) -> Callable[[W, Arr], Arr]:
+def batch_ops(f: Callable[[W, Arr], Arr], label: str, add_behind: bool, skip_w: bool) -> Callable[[W, Arr], Arr]:
     if add_behind:
-        extension = [None, label]
+        extension = [..., label]
     else:
-        extension = [label, None]
-    return xmap(f, no_w(extension), extension)
+        extension = [label, ...]
+    if skip_w:
+        return xmap(f, no_w(extension), extension)
+    else:
+        return xmap(f, extension, extension)
 
 
 def for_all_T(f: Callable[[W, Arr], Arr]) -> Callable[[W, Arr], Arr]:
-    return batch_ops(f, 'T', False)
+    return batch_ops(f, 'T', False, True)
+
+
+def batch_fy(f: Callable[[W, Arr], Arr]) -> Callable[[W, Arr], Arr]:
+    return batch_ops(f, 'batch', False, True)
 
 
 def gelu(x: Arr) -> Arr:
@@ -42,11 +50,11 @@ class Linear:
     class Config(NamedTuple):
         n_in: Optional[int] = None
         n_out: Optional[int] = None
-        w_name: str = "w"
-        b_name: str = "b"
+        w_save_name: str = "w"
+        b_save_name: str = "b"
         w_init: Literal["kaiming"] = "kaiming"
         b_init: Literal[0] = 0
-        name: str = "linear"
+        save_name: str = "linear"
 
         def make(self) -> Linear:
             check_config(self)
@@ -58,12 +66,12 @@ class Linear:
             assert self.n_out is not None
             return dict(
                 w=WeightConfig(
-                    name=self.w_name,
+                    save_name=self.w_save_name,
                     shape=(self.n_in, self.n_out),
                     init=self.w_init
                 ),
                 b=WeightConfig(
-                    name=self.b_name,
+                    save_name=self.b_save_name,
                     shape=(self.n_out,),
                     init=self.b_init)
             )
@@ -71,6 +79,9 @@ class Linear:
         @property
         def parts(self) -> PartsDict:
             return {}
+
+        def fill(self) -> Linear.Config:
+            return self
 
         def weights_check(self, w: WeightsTree) -> Linear.Weights:
             return cast(Linear.Weights, config_weights_check(self, w))
@@ -99,11 +110,11 @@ class LN:
         # all the other dimensions are normalized
         norm_dims: Optional[tuple[int, ...]] = None
         x_shape: Optional[tuple[Optional[int], ...]] = None
-        w_name: str = "w"
-        b_name: str = "b"
+        w_save_name: str = "w"
+        b_save_name: str = "b"
         w_init: Literal[0] = 0
         b_init: Literal[0] = 0
-        name: str = "ln"
+        save_name: str = "ln"
         norm_dim_name: str = "norm_dim"
 
         def make(self) -> LN:
@@ -125,12 +136,12 @@ class LN:
             non_norm_shape = cast(tuple[int, ...], non_norm_shape)
             return dict(
                 w=WeightConfig(
-                    name=self.w_name,
+                    save_name=self.w_save_name,
                     shape=non_norm_shape,
                     init=self.w_init
                 ),
                 b=WeightConfig(
-                    name=self.b_name,
+                    save_name=self.b_save_name,
                     shape=non_norm_shape,
                     init=self.b_init
                 )
@@ -139,6 +150,9 @@ class LN:
         @property
         def parts(self) -> PartsDict:
             return {}
+
+        def fill(self) -> LN.Config:
+            return self
 
         def weights_check(self, w: WeightsTree) -> LN.Weights:
             return cast(LN.Weights, config_weights_check(self, w))
@@ -157,4 +171,3 @@ class LN:
         o = x - mean(x, axis=self.config.non_norm_dims, keepdims=True)
         i = o * rsqrt(var(x, axis=self.config.non_norm_dims, keepdims=True) + self.eps)
         return w['w'] * i + w['b']
-
