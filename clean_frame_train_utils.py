@@ -11,7 +11,7 @@ Weights = TypeVar('Weights')
 Batch = TypeVar('Batch')
 
 
-@partial(jax.jit, static_argnums=(0, 1))
+@partial(jax.jit, static_argnums=(0, 1), inline=True)
 def jax_calc_updates(
         optimizer: optax.GradientTransformation,
         loss_fn: Callable[[Batch], Arr],

@@ -14,6 +14,10 @@ ArrayGen = Literal['kaiming', 'dropout', 'embedding', 'normal']
 Arr = jax.Array
 
 
+def jit_f(f: Callable) -> Callable:
+    return jax.jit(f, static_argnums=(0,), inline=True)
+
+
 class WeightConfig(NamedTuple):
     # from in to out
     save_name: str

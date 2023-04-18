@@ -4,12 +4,13 @@ from typing import NamedTuple, TypeVar, Callable, TypedDict, Literal, cast, \
     Optional
 
 from chex import assert_shape
+from jax import vmap
 from jax.experimental.maps import xmap
 from jax.lax import rsqrt
 from jax.numpy import mean, var, sqrt, tanh, pi
 
 from clean_frame_utils import Arr, PartsDict, WeightConfig, WeightsTree, \
-    WeightConfigDict, check_config, config_weights_check
+    WeightConfigDict, check_config, config_weights_check, jit_f
 
 C = TypeVar('C')
 W = TypeVar('W')
@@ -23,7 +24,7 @@ def no_w(d: C) -> tuple[list, C]:
     return [...], d
 
 
-def batch_ops(f: Callable[[W, Arr], Arr], label: str, add_behind: bool, skip_w: bool) -> Callable[[W, Arr], Arr]:
+def batch_ops_x(f: Callable[[W, Arr], Arr], label: str, add_behind: bool, skip_w: bool) -> Callable[[W, Arr], Arr]:
     if add_behind:
         extension = [..., label]
     else:
@@ -32,6 +33,17 @@ def batch_ops(f: Callable[[W, Arr], Arr], label: str, add_behind: bool, skip_w: 
         return xmap(f, no_w(extension), extension)
     else:
         return xmap(f, extension, extension)
+
+
+def batch_ops(f: Callable[[W, Arr], Arr], label: str, add_behind: bool, skip_w: bool) -> Callable[[W, Arr], Arr]:
+    if add_behind:
+        extension = -1
+    else:
+        extension = 0
+    if skip_w:
+        return vmap(f, (None, extension), extension)
+    else:
+        return vmap(f, extension, extension)
 
 
 def for_all_T(f: Callable[[W, Arr], Arr]) -> Callable[[W, Arr], Arr]:
@@ -47,6 +59,17 @@ def gelu(x: Arr) -> Arr:
 
 
 class Linear:
+    class Weights(TypedDict):
+        w: Arr
+        b: Arr
+
+    @jit_f
+    def f(self, w: Weights, x: Arr) -> Arr:
+        assert_shape(x, (self.n_in,))
+        result = w['w'].T @ x + w['b']
+        assert_shape(result, (self.n_out,))
+        return result
+
     class Config(NamedTuple):
         n_in: Optional[int] = None
         n_out: Optional[int] = None
@@ -86,10 +109,6 @@ class Linear:
         def weights_check(self, w: WeightsTree) -> Linear.Weights:
             return cast(Linear.Weights, config_weights_check(self, w))
 
-    class Weights(TypedDict):
-        w: Arr
-        b: Arr
-
     def __init__(self, config: Config):
         self.config = config
         assert config.n_in is not None
@@ -97,14 +116,19 @@ class Linear:
         self.n_in = config.n_in
         self.n_out = config.n_out
 
-    def f(self, w: Weights, x: Arr) -> Arr:
-        assert_shape(x, (self.n_in,))
-        result = w['w'].T @ x + w['b']
-        assert_shape(result, (self.n_out,))
-        return result
-
 
 class LN:
+    class Weights(TypedDict):
+        w: Arr
+        b: Arr
+
+    # x: self.shape
+    @jit_f
+    def f(self, w: LN.Weights, x: Arr) -> Arr:
+        o = x - mean(x, axis=self.config.non_norm_dims, keepdims=True)
+        i = o * rsqrt(var(x, axis=self.config.non_norm_dims, keepdims=True) + self.eps)
+        return w['w'] * i + w['b']
+
     class Config(NamedTuple):
         eps: Optional[float] = None
         # all the other dimensions are normalized
@@ -157,17 +181,7 @@ class LN:
         def weights_check(self, w: WeightsTree) -> LN.Weights:
             return cast(LN.Weights, config_weights_check(self, w))
 
-    class Weights(TypedDict):
-        w: Arr
-        b: Arr
-
     def __init__(self, config: Config):
         assert config.eps is not None
         self.config = config
         self.eps = config.eps
-
-    # x: self.shape
-    def f(self, w: LN.Weights, x: Arr) -> Arr:
-        o = x - mean(x, axis=self.config.non_norm_dims, keepdims=True)
-        i = o * rsqrt(var(x, axis=self.config.non_norm_dims, keepdims=True) + self.eps)
-        return w['w'] * i + w['b']
