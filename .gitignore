@@ -127,4 +127,8 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# wanb/jax
 jax-trace/*
+wandb/*
+wandb
