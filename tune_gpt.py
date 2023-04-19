@@ -2,18 +2,23 @@ from __future__ import annotations
 
 import os
 from functools import partial
+from pathlib import Path
 from typing import Callable
 
 import jax.numpy as jnp
 import optax
-import wandb
+# import wandb
 from optax import softmax_cross_entropy_with_integer_labels
+from safetensors import safe_open
 
 import gpt
+from clean_frame import LN, Linear
 from clean_frame import batch_fy
-from clean_frame_utils import Arr, init_weight_module
+from clean_frame_utils import Arr
+from clean_frame_utils import load_config
 from custom_dataset import load_jax_cached
 from gpt import Gpt
+from gpt import GptMha, GptFfn, GptBlock, GptDecoder
 from jax_init_utils import infinite_safe_keys
 from train_utils import BatchConfig, TrainConfig, TrainState, BatchType
 
@@ -70,18 +75,16 @@ experimental_params = {
     'train': train_params
 }
 
-wandb.init(
-    project="inside-transformer",
-    config=experimental_params,
-)
+# wandb.init(
+#     project="inside-transformer",
+#     config=experimental_params,
+# )
 
 max_iters = experimental_params['train']['max_iters']
 eval_interval = experimental_params['train']['eval_interval']
 eval_iters = experimental_params['train']['eval_iters']
 batch_config_ = BatchConfig(block_size=experimental_params['block_size'],
                             batch_size=experimental_params['batch_size'])
-
-# dataset = "english"
 
 gpt_config_ = Gpt.Config(eps=experimental_params['eps'],
                          n_channels=experimental_params['n_channels'],
@@ -90,10 +93,42 @@ gpt_config_ = Gpt.Config(eps=experimental_params['eps'],
                          n_seq=batch_config_.block_size,
                          max_seq_len=batch_config_.block_size,
                          n_blocks=experimental_params['n_blocks'],
-                         n_tokens=vocab_size_).fill()
+                         n_tokens=vocab_size_,
+                         token_embedding_save_name='wte.weight',
+                         positional_embedding_save_name='wpe.weight',
+                         ln=LN.Config(w_save_name='weight', b_save_name='bias', save_name='ln_f'),
+                         save_name="",
+                         decoder=GptDecoder.Config(
+                             save_name='h',
+                             blocks=GptBlock.Config(
+                                 save_name="",
+                                 mha=GptMha.Config(
+                                     save_name='attn',
+                                     QKV_linear=Linear.Config(save_name='c_attn', w_save_name='weight',
+                                                              b_save_name='bias'),
+                                     linear=Linear.Config(save_name="c_proj", w_save_name='weight', b_save_name='bias'),
+                                 ),
+                                 ln1=LN.Config(w_save_name='weight', b_save_name='bias', save_name='ln_1'),
+                                 ffn=GptFfn.Config(
+                                     save_name='mlp',
+                                     linear1=Linear.Config(w_save_name='weight', b_save_name='bias', save_name='c_fc'),
+                                     linear2=Linear.Config(w_save_name='weight', b_save_name='bias',
+                                                           save_name='c_proj'),
+                                 ),
+                                 ln2=LN.Config(w_save_name='weight', b_save_name='bias', save_name='ln_2')
+                             )
+                         )).fill()
+
+# dataset = "english"
 
 
-init_weights_ = gpt_config_.weights_check(init_weight_module(gpt_config_, next(key_gen)))
+path = Path("/Data/lm_models/gpt2")
+with safe_open(path / "model.safetensors", framework="flax", device="cpu") as f:
+    weights_tree_ = load_config(gpt_config_, f.get_tensor)
+    print(weights_tree_.keys())
+
+gpt_ = gpt_config_.make()
+init_weights_ = gpt_config_.weights_check(weights_tree_)
 
 if experimental_params['train']['optimizer'] == 'adam':
     adam_config = experimental_params['train']['adam']
@@ -138,7 +173,7 @@ for step in range(max_iters):
         loss = train_config_.loss_fn(train_state_.weights, batch_)
         print(f"after step {step}, batch loss {loss}")
         results = train_config_.estimate_loss(eval_iters, key_gen, train_state_, batch_config_,
-                                    {'train': train_data, 'val': valid_data})
+                                              {'train': train_data, 'val': valid_data})
         # generate_f = jax.jit(partial(dynamic_model.f, train_state_.weights))
         # generated = gpt.generate(generate_f, [0], n_tokens_to_generate=10,
         #                          max_len=batch_config_.block_size)
@@ -147,11 +182,11 @@ for step in range(max_iters):
         generated = gpt.generate_static(generate_f, [0],
                                         n_tokens_to_generate=batch_config_.block_size - 1,
                                         max_len=batch_config_.block_size)
-        wandb.log({"train_loss": results['train'],
-                   "validation_loss": results['val'],
-                   "batch_loss": loss,
-                   "n_tokens_trained": step * batch_config_.batch_size * batch_config_.block_size,
-                   'generated': wandb.Html(f"{decode(generated)}")})
+        # wandb.log({"train_loss": results['train'],
+        #            "validation_loss": results['val'],
+        #            "batch_loss": loss,
+        #            "n_tokens_trained": step * batch_config_.batch_size * batch_config_.block_size,
+        #            'generated': wandb.Html(f"{decode(generated)}")})
         print(decode(generated), flush=True)
 
-wandb.finish()
+# wandb.finish()
