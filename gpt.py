@@ -573,6 +573,6 @@ def get_positional_encoding(max_len: int, d_model: int):
     )
     pe = pe.at[:, 0::2].set(jnp.sin(position * div_term))
     pe = pe.at[:, 1::2].set(jnp.cos(position * div_term))
-    return pe.T
+    return pe
 
 

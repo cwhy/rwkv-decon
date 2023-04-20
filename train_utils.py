@@ -1,14 +1,33 @@
 from __future__ import annotations
 
-from typing import Iterable, TypeVar, Generic, Callable, Iterator
+from functools import partial
+from typing import Callable, TypeVar
+from typing import Iterable, Generic, Iterator
 
+import jax
+import optax
 from jax import random, numpy as jnp
-from optax._src.base import GradientTransformation, OptState
+from optax import GradientTransformation, OptState
 from typing_extensions import NamedTuple
 
-from clean_frame_train_utils import jax_calc_updates
 from clean_frame_utils import Arr, Module, jit_f
 from jax_init_utils import SafeKey
+
+Weights = TypeVar('Weights')
+Batch = TypeVar('Batch')
+
+
+@partial(jax.jit, static_argnums=(0, 1), inline=True)
+def jax_calc_updates(
+        optimizer: optax.GradientTransformation,
+        loss_fn: Callable[[Batch], Arr],
+        weights: Weights,
+        batch: Batch,
+        opt_state: optax.OptState
+) -> tuple[Weights, optax.OptState]:
+    grads = jax.grad(loss_fn)(weights, batch)
+    updates, opt_state = optimizer.update(grads, opt_state, weights)
+    return optax.apply_updates(weights, updates), opt_state
 
 
 class BatchConfig(NamedTuple):

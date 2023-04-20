@@ -10,7 +10,7 @@ import wandb
 from optax import softmax_cross_entropy_with_integer_labels
 
 import gpt
-from clean_frame import batch_fy
+from clean_frame import batch_fy, Linear
 from clean_frame_utils import Arr, init_weight_module
 from custom_dataset import load_jax_cached
 from gpt import Gpt
@@ -45,8 +45,9 @@ adam_params = {
 }
 lion_params = {
     'learning_rate': 1e-4,
-    'beta1': 0.9,
-    'beta2': 0.99,
+    'beta1': 0.95,
+    'beta2': 0.98,
+    'weight_decay': 0.01
 }
 train_params = {
     'eval_iters': 200,
@@ -70,7 +71,6 @@ experimental_params = {
     'train': train_params
 }
 
-
 max_iters = experimental_params['train']['max_iters']
 eval_interval = experimental_params['train']['eval_interval']
 eval_iters = experimental_params['train']['eval_iters']
@@ -86,12 +86,24 @@ gpt_config_ = Gpt.Config(eps=experimental_params['eps'],
                          n_seq=batch_config_.block_size,
                          max_seq_len=batch_config_.block_size,
                          n_blocks=experimental_params['n_blocks'],
-                         n_tokens=vocab_size_).fill()
+                         n_tokens=vocab_size_,
+                         decoder=gpt.GptDecoder.Config(
+                             blocks=gpt.GptBlock.Config(
+                                    mha=gpt.GptMha.Config(
+                                        linear=Linear.Config(
+                                        ),
+                                        QKV_linear=Linear.Config(
+                                        )
+                                    ),
+                                    ffn=gpt.GptFfn.Config(
+                                    )
+                             )
+                         )).fill()
 
-
-init_weights_ = gpt_config_.weights_check(init_weight_module(gpt_config_, next(key_gen)))
-init_weights_['positional_encoding'] = gpt.get_positional_encoding(experimental_params['block_size'],
-                                                                   experimental_params['n_channels'])
+raw_weights = init_weight_module(gpt_config_, next(key_gen))
+raw_weights['positional_encoding'] = gpt.get_positional_encoding(experimental_params['block_size'],
+                                                                 experimental_params['n_channels'])
+init_weights_ = gpt_config_.weights_check(raw_weights)
 
 if experimental_params['train']['optimizer'] == 'adam':
     adam_config = experimental_params['train']['adam']
@@ -103,7 +115,8 @@ elif experimental_params['train']['optimizer'] == 'lion':
     lion_config = experimental_params['train']['lion']
     optimizer_ = optax.lion(learning_rate=lion_config['learning_rate'],
                             b1=lion_config['beta1'],
-                            b2=lion_config['beta2'])
+                            b2=lion_config['beta2'],
+                            weight_decay=lion_config['weight_decay'])
 elif experimental_params['train']['optimizer'] == 'adamw':
     adamw_config = experimental_params['train']['adamw']
     optimizer_ = optax.adamw(learning_rate=adamw_config['learning_rate'],
@@ -140,7 +153,7 @@ for step in range(max_iters):
         loss = train_config_.loss_fn(train_state_.weights, batch_)
         print(f"after step {step}, batch loss {loss}")
         results = train_config_.estimate_loss(eval_iters, key_gen, train_state_, batch_config_,
-                                    {'train': train_data, 'val': valid_data})
+                                              {'train': train_data, 'val': valid_data})
         # generate_f = jax.jit(partial(dynamic_model.f, train_state_.weights))
         # generated = gpt.generate(generate_f, [0], n_tokens_to_generate=10,
         #                          max_len=batch_config_.block_size)
@@ -158,3 +171,4 @@ for step in range(max_iters):
 
 wandb.finish()
 # TODO: add trainable weights
+# TODO: add weight decay
