@@ -157,3 +157,4 @@ for step in range(max_iters):
         print(decode(generated), flush=True)
 
 wandb.finish()
+# TODO: add trainable weights
