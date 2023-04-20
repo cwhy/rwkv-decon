@@ -53,9 +53,9 @@ train_params = {
     'eval_interval': 2000,
     'max_iters': 1000000,
     # 'adam': adam_params,
-    # 'lion': lion_params,
-    'optimizer': 'adamw',
-    'adamw': adam_params,
+    'lion': lion_params,
+    # 'adamw': adam_params,
+    'optimizer': 'lion',
 }
 
 experimental_params = {
@@ -70,10 +70,6 @@ experimental_params = {
     'train': train_params
 }
 
-wandb.init(
-    project="inside-transformer",
-    config=experimental_params,
-)
 
 max_iters = experimental_params['train']['max_iters']
 eval_interval = experimental_params['train']['eval_interval']
@@ -94,6 +90,8 @@ gpt_config_ = Gpt.Config(eps=experimental_params['eps'],
 
 
 init_weights_ = gpt_config_.weights_check(init_weight_module(gpt_config_, next(key_gen)))
+init_weights_['positional_encoding'] = gpt.get_positional_encoding(experimental_params['block_size'],
+                                                                   experimental_params['n_channels'])
 
 if experimental_params['train']['optimizer'] == 'adam':
     adam_config = experimental_params['train']['adam']
@@ -125,6 +123,10 @@ train_config_ = TrainConfig(model=gpt_config_.make(),
 train_state_: TrainState[Gpt.Weights] = TrainState(weights=init_weights_,
                                                    opt_state=optimizer_.init(init_weights_))
 
+wandb.init(
+    project="inside-transformer",
+    config=experimental_params,
+)
 keys_ = next(key_gen).split(max_iters)
 for step in range(max_iters):
     batch_ = batch_config_.sample(train_data, keys_[step])

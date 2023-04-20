@@ -8,7 +8,6 @@ from chex import assert_shape
 from einops import rearrange
 from jax import numpy as jnp, vmap, random
 from jax.lax import scan
-from jax.experimental.maps import xmap
 from jax.nn import softmax
 from tqdm import tqdm
 
@@ -564,3 +563,16 @@ def generate_static_inplace(get_logits: Callable[[Arr], Arr],
     tokens, _ = scan(scan_f, tokens, indexes)
 
     return tokens.tolist()
+
+
+def get_positional_encoding(max_len: int, d_model: int):
+    pe = jnp.zeros((max_len, d_model))
+    position = jnp.expand_dims(jnp.arange(0, max_len), 1)
+    div_term = jnp.exp(
+        jnp.arange(0, d_model, 2) * -(jnp.log(10000.0) / d_model)
+    )
+    pe = pe.at[:, 0::2].set(jnp.sin(position * div_term))
+    pe = pe.at[:, 1::2].set(jnp.cos(position * div_term))
+    return pe.T
+
+
