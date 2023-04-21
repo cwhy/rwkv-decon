@@ -16,25 +16,20 @@ path = Path("/Data/lm_models/rwkv")
 model_name = 'RWKV-4-Pile-430M-20220808-8066'
 # jax.config.update('jax_platform_name', 'cpu')
 
-w = types.SimpleNamespace()  # set self.w from w
+w = {}
 with safe_open(path / f"{model_name}.safetensors", framework="flax", device="cpu") as f:
-    w.blocks = {}
-    for k in f.keys():  # example: "blocks.0.att.time_first" => self.w.blocks[0].att.time_first
+    for k in f.keys():
         parts = k.split('.')
         last = parts.pop()
         current_ = w
         for p in parts:
             if p.isdigit():
                 p = int(p)
-                assert isinstance(current_, dict)
-                if p not in current_:
-                    current_[p] = types.SimpleNamespace()
-                current_ = current_[p]
-            else:
-                if not hasattr(current_, p):
-                    setattr(current_, p, types.SimpleNamespace())
-                current_ = getattr(current_, p)
-        setattr(current_, last, f.get_tensor(k))
+            assert isinstance(current_, dict)
+            if p not in current_:
+                current_[p] = {}
+            current_ = current_[p]
+        current_[last] = f.get_tensor(k)
 
 # %%
 
@@ -43,7 +38,6 @@ tokenizer = Tokenizer.from_file(str(path / "20B_tokenizer.json"))
 n_channels = 1024
 ffn_ratio = 4
 n_layers = 24
-
 
 key_gen = infinite_safe_keys(0)
 
@@ -62,17 +56,19 @@ def sample_logits(logits, key, temperature=1.0, top_p=0.8):
     return out
 
 
-
-
-context = "\nPumas are large, cat-like animals found in America. When reports came into London Zoo that"
+context = ("\nPumas are large, cat-like animals found in America. When reports came into London Zoo that "
+           "a wild puma had been spotted forty-five miles south of London, they were not taken seriously."
+           " However, as the evidence began to accumulate, experts from the Zoo felt obliged to investigate,"
+           " for the descriptions given by people who claimed to have seen the puma were extraordinarily similar."
+           "\nThe hunt for the puma began in a small village where a woman picking blackberries saw 'a large cat'"
+           " only five yards away from her. It")
 
 tokens = tokenizer.encode(context)
 
-state = np.zeros((n_layers * 5, n_channels))
+state = np.zeros((n_layers, 5, n_channels))
 for i in range(n_layers):
     # to jax state[5 * i + 4] = -1e30
-    state = state.at[5 * i + 4].set(-1e30)
-
+    state = state.at[i, 4].set(-1e30)
 
 for token in tokens.ids:
     init_out, state = rwkv_net_w(token, state, w)
