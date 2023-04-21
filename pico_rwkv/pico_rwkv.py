@@ -16,20 +16,6 @@ def time_mix(x, old_state, mix):
     return x * mix + old_state * (1 - mix)
 
 
-@partial(jit, static_argnames='i')
-def projection(x, state, i: int, time_mix_k, time_mix_v, time_mix_r, kw, vw, rw):
-    xk = time_mix(x, state[i, 1], time_mix_k)
-    xv = time_mix(x, state[i, 1], time_mix_v)
-    xr = time_mix(x, state[i, 1], time_mix_r)
-
-    state = state.at[i, 1].set(x)
-
-    r = sigmoid(rw @ xr)
-    k = kw @ xk
-    v = vw @ xv
-    return r, k, v, state
-
-
 def exp_mix(max_coef, k, v_s, v, base):
     """
     1. If `max_coef >= k`, the mixed value and the updated base value are computed as follows:
@@ -75,12 +61,9 @@ def rwkv(r, ow, k, v, state, i: int, time_first, time_decay):
     """
     wkv_top, wkv_bot, max_coef = state[i, 2], state[i, 3], state[i, 4]
 
-    def mix(decay, k0):
-        return exp_mix(max_coef + decay, k + k0, wkv_top, v, wkv_bot)
-
-    wkv_top, wkv_bot, _ = mix(0, time_first)
+    wkv_top, wkv_bot, _ = exp_mix(max_coef, k + time_first, wkv_top, v, wkv_bot)
     wkv = wkv_top / wkv_bot
-    wkv_top_new, wkv_bot_new, max_coef = mix(time_decay, 0)
+    wkv_top_new, wkv_bot_new, max_coef = exp_mix(max_coef + time_decay, k, wkv_top, v, wkv_bot)
 
     state = state.at[i, 2].set(wkv_top_new)
     state = state.at[i, 3].set(wkv_bot_new)
@@ -90,7 +73,15 @@ def rwkv(r, ow, k, v, state, i: int, time_first, time_decay):
 
 @partial(jit, static_argnames='i')
 def token_mixing(x, state, i: int, time_mix_k, time_mix_v, time_mix_r, time_first, time_decay, kw, vw, rw, ow):
-    r, k, v, state = projection(x, state, i, time_mix_k, time_mix_v, time_mix_r, kw, vw, rw)
+    xk = time_mix(x, state[i, 1], time_mix_k)
+    xv = time_mix(x, state[i, 1], time_mix_v)
+    xr = time_mix(x, state[i, 1], time_mix_r)
+
+    state = state.at[i, 1].set(x)
+
+    r = sigmoid(rw @ xr)
+    k = kw @ xk
+    v = vw @ xv
     return rwkv(r, ow, k, v, state, i, time_first, time_decay)
 
 
