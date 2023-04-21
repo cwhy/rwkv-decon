@@ -75,7 +75,7 @@ def debug(inputs) -> dict[str, Arr]:
     logits, to_save = jit(gpt_.f_debug)(checked_weights, jnp.array(inputs))
     out = encoder.decode([int(jnp.argmax(logits[-1]))])
     print(out)
-    save_dir = "saves"
+    save_dir = "../saves"
     return save_file(to_save, f'{save_dir}/view_vec2_dict_jit')
 
 
