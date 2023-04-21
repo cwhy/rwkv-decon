@@ -78,8 +78,6 @@ def block(x, state, i: int, att, ffn, ln1, ln2):
     xn = layer_norm(x, ln2.weight, ln2.bias)
     xp, state = channel_mixing(xn, state, i, ffn.time_mix_k, ffn.time_mix_r, ffn.key.weight, ffn.value.weight,
                                ffn.receptance.weight)
-    print(xp)
-    raise Exception("stop")
     x += xp
     return x, state
 

@@ -65,10 +65,15 @@ class RWKV_RNN(torch.jit.ScriptModule):
 
     @torch.jit.script_method
     def time_mixing(self, x, state, i: int, time_mix_k, time_mix_v, time_mix_r, time_first, time_decay, kw, vw, rw, ow):
+        if i == 10:
+            print(state[5 * i + 1])
+            raise Exception("stop")
         xk = x * time_mix_k + state[5 * i + 1] * (1 - time_mix_k)
         xv = x * time_mix_v + state[5 * i + 1] * (1 - time_mix_v)
         xr = x * time_mix_r + state[5 * i + 1] * (1 - time_mix_r)
         state[5 * i + 1] = x
+        if i == 9:
+            print(state[5 * i + 1])
         r = torch.sigmoid(rw @ xr)
         k = kw @ xk
         v = vw @ xv
@@ -111,7 +116,6 @@ class RWKV_RNN(torch.jit.ScriptModule):
                                             ffn.time_mix_k, ffn.time_mix_r,
                                             ffn.key.weight, ffn.value.weight, ffn.receptance.weight)
                 x += xp
-                raise Exception("stop")
 
             x = self.w.head.weight @ self.layer_norm(x, self.w.ln_out)
             return x.float(), state

@@ -14,7 +14,7 @@ from pico_rwkv.pico_rwkv import rwkv_net_w
 
 path = Path("/Data/lm_models/rwkv")
 model_name = 'RWKV-4-Pile-430M-20220808-8066'
-jax.config.update('jax_platform_name', 'cpu')
+# jax.config.update('jax_platform_name', 'cpu')
 
 w = types.SimpleNamespace()  # set self.w from w
 with safe_open(path / f"{model_name}.safetensors", framework="flax", device="cpu") as f:
@@ -42,29 +42,29 @@ tokenizer = Tokenizer.from_file(str(path / "20B_tokenizer.json"))
 
 n_channels = 1024
 ffn_ratio = 4
-n_layers = 10
+n_layers = 24
 
 
 key_gen = infinite_safe_keys(0)
 
 
-def sample_logits(out, key, temperature=1.0, top_p=0.8):
-    probs = softmax(out, axis=-1)
+def sample_logits(logits, key, temperature=1.0, top_p=0.8):
+    probs = softmax(logits, axis=-1)
     sorted_probs = np.sort(probs)[::-1]
     cumulative_probs = np.cumsum(sorted_probs)
     cutoff = float(sorted_probs[np.argmax(cumulative_probs > top_p)])
-    probs = probs.at[probs < cutoff].set(0)
+    probs = np.where(probs < cutoff, 0, probs)
     if temperature != 1.0:
         probs = np.power(probs, 1.0 / temperature)
     probs = probs / np.sum(probs)
 
-    out = random.categorical(key.get(), probs, axis=-1)
+    out = random.choice(key.get(), a=len(probs), p=probs)
     return out
 
 
 
 
-context = "\nPumas are large, cat-like animals"
+context = "\nPumas are large, cat-like animals found in America. When reports came into London Zoo that"
 
 tokens = tokenizer.encode(context)
 
@@ -73,8 +73,9 @@ for i in range(n_layers):
     # to jax state[5 * i + 4] = -1e30
     state = state.at[5 * i + 4].set(-1e30)
 
+
 for token in tokens.ids:
-    init_out, init_state = rwkv_net_w(token, state, w)
+    init_out, state = rwkv_net_w(token, state, w)
 
 NUM_TRIALS = 3
 LENGTH_PER_TRIAL = 100
@@ -85,10 +86,10 @@ for TRIAL in range(NUM_TRIALS):
     print(f'\n\n--[ Trial {TRIAL} ]-----------------', context, end="")
     all_tokens = []
     out_last = 0
-    out, state = init_out, init_state
+    out, state = init_out, state.copy()
     for i in range(LENGTH_PER_TRIAL):
-        token = np.argmax(out)
-        # token = sample_logits(out, next(key_gen), TEMPERATURE, TOP_P)
+        # token = np.argmax(out)
+        token = sample_logits(out, next(key_gen), TEMPERATURE, TOP_P)
         all_tokens.append(token)
         tmp = tokenizer.decode(all_tokens[out_last:])
         if '\ufffd' not in tmp:  # only print when we have a valid utf-8 string
