@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import jax
 import jax.numpy as np
 from jax import random
 from jax.nn import softmax
@@ -7,7 +8,7 @@ from safetensors import safe_open
 from tokenizers import Tokenizer
 
 from jax_init_utils import infinite_safe_keys
-from pico_rwkv.pico_rwkv_parallel import rwkv_net_w
+from pico_rwkv.pico_rwkv_parallel import rwkv_net_parallel
 
 path = Path("/Data/lm_models/rwkv")
 model_name = 'RWKV-4-Pile-430M-20220808-8066'
@@ -36,7 +37,6 @@ for i in w['blocks'].keys():
     w['blocks'][i]['ffn']['vw'] = w['blocks'][i]['ffn']['value']['weight']
     w['blocks'][i]['ffn']['rw'] = w['blocks'][i]['ffn']['receptance']['weight']
 
-# %%
 
 tokenizer = Tokenizer.from_file(str(path / "20B_tokenizer.json"))
 
@@ -68,15 +68,23 @@ context = ("\nPumas are large, cat-like animals found in America. When reports c
            "\nThe hunt for the puma began in a small village where a woman picking blackberries saw 'a large cat'"
            " only five yards away from her. It")
 
-tokens = tokenizer.encode(context)
+token_objs = tokenizer.encode(context)
 
-state = np.zeros((n_layers, 5, n_channels))
+max_len = 128
+state = np.zeros((n_layers, max_len, 5, n_channels))
 for i in range(n_layers):
     state = state.at[i, 4].set(-1e30)
 
 
-for token in tokens.ids:
-    init_out, state = rwkv_net_w(token, state, w)
+if len(token_objs.ids) < max_len:
+    l_token_array = np.array([0] * (max_len - len(token_objs.ids)) + token_objs.ids, dtype=np.int32)
+else:
+    l_token_array = np.array(token_objs.ids, dtype=np.int32)
+token_array = l_token_array[-max_len:]
+
+init_out, state = rwkv_net_parallel(token_array, state, **w)
+
+#%%
 
 NUM_TRIALS = 3
 LENGTH_PER_TRIAL = 100
@@ -96,4 +104,4 @@ for TRIAL in range(NUM_TRIALS):
         if '\ufffd' not in tmp:  # only print when we have a valid utf-8 string
             print(tmp, end="", flush=True)
             out_last = i + 1
-        out, state = rwkv_net_w(token, state, w)
+        out, state = rwkv_net_parallel(token, state, **w)

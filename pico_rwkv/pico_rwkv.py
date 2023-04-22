@@ -134,7 +134,3 @@ def rwkv_net(token, state, ln_out, blocks, head, emb):
 def rwkv_net_w(token, state, w):
     return rwkv_net(token, state, w['ln_out'], w['blocks'], w['head'], w['emb'])
 
-# [Done] load params
-# [Done] jit
-# [TODO] associative scan
-# [TODO] pico-plus
