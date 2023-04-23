@@ -35,22 +35,20 @@ def exp_mix(max_coef, k, v_s, v, base):
     return mix_v, base_new, new_max_coef
 
 
-def rwkv_state_flow(time_decay, state_wkv, kv):
-    print("state_wkv")
-    k, v = kv
-    wkv_top, wkv_bot, max_coef = state_wkv
-    return np.stack(exp_mix(max_coef + time_decay, k, wkv_top, v, wkv_bot))
-
-
 def rwkv(r, ow, k, v, state_wkv, time_first):
     """
-    state_wkv: (wkv_top, wkv_bot, max_coef) / state[i, 2:].T
+    state_wkv: (v_state, wkv_bot, max_coef) / state[i, 2:].T
     """
-    wkv_top, wkv_bot, max_coef = state_wkv
+    v_state, base_state, max_coef = state_wkv
 
-    wkv_top, wkv_bot, _ = exp_mix(max_coef, k + time_first, wkv_top, v, wkv_bot)
-    wkv = wkv_top / wkv_bot
+    v_state, base_state, _ = exp_mix(max_coef, k + time_first, v_state, v, base_state)
+    wkv = v_state / base_state
     return ow @ (r * wkv)
+
+
+def rwkv_state_flow(time_decay, state_wkv, k, v):
+    v_state, base_state, max_coef = state_wkv
+    return exp_mix(max_coef + time_decay, k, v_state, v, base_state)
 
 
 def token_mixing(x, x_prev, time_mix_k, time_mix_v, time_mix_r, kw, vw, rw, **kwargs):
@@ -72,32 +70,32 @@ def channel_mixing(x, x_prev, time_mix_k, time_mix_r, kw, vw, rw, **kwargs):
     return r * (vw @ k)
 
 
-def x_shift_parallel(x):
-    # Pad with 1 row at the beginning of the first dimension and no padding for the second dimension
-    pad_width = ((1, 0), (0, 0))
-    # Pad the array and remove the last row along the first axis
-    padded_arr = np.pad(x, pad_width, mode='constant')[:-1, :]
-    return padded_arr
-
-
-def token_mixing_parallel(x, time_mix_k, time_mix_v, time_mix_r, kw, vw, rw, **kwargs):
-    x_prev = x_shift_parallel(x)
+def token_mixing_parallel(x, x_prev1, time_mix_k, time_mix_v, time_mix_r, kw, vw, rw, **kwargs):
+    x_prev = np.vstack((x_prev1, x[:-1, :]))
     token_mixing_p = vmap(token_mixing, in_axes=(0, 0, None, None, None, None, None, None), out_axes=(0, 0, 0))
     return token_mixing_p(x, x_prev, time_mix_k, time_mix_v, time_mix_r, kw, vw, rw)
 
 
-def channel_mixing_parallel(x, time_mix_k, time_mix_r, kw, vw, rw, **kwargs):
-    x_prev = x_shift_parallel(x)
-    channel_mixing_p = vmap(channel_mixing, in_axes=(0, 0, None, None, None, None), out_axes=0)
+def channel_mixing_parallel(x, x_prev1, time_mix_k, time_mix_r, kw, vw, rw, **kwargs):
+    x_prev = np.vstack((x_prev1, x[:-1, :]))
+    channel_mixing_p = vmap(channel_mixing, in_axes=(0, 0, None, None, None, None, None), out_axes=0)
     return channel_mixing_p(x, x_prev, time_mix_k, time_mix_r, kw, vw, rw)
+
+
+def rwkv_state_flow_scan(time_decay, state_wkv, kv):
+    # state_wkv.shape: t, 3, n_channels
+    k, v = kv
+    new_state = rwkv_state_flow(time_decay, state_wkv, k, v)
+    return np.stack(new_state), (k, v)
 
 
 @jit
 def rwkv_net_rnn(token, state, ln_out, blocks, head, emb):
+    # print(state.shape)
     x = emb['weight'][token]
     w_ln0 = blocks[0]['ln0']
     x = layer_norm(x, **w_ln0)
-    new_states = []
+    new_states = np.empty_like(state)
     for i in range(len(blocks)):
         block_w = blocks[i]
 
@@ -105,6 +103,7 @@ def rwkv_net_rnn(token, state, ln_out, blocks, head, emb):
         r, k, v = token_mixing(xn_token, state[i, 1], **block_w['att'])
 
         state_wkv = state[i, 2:]
+        # print(state_wkv.shape)
 
         x += rwkv(r, block_w['att']['output']['weight'], k, v, state_wkv, block_w['att']['time_first'])
         xn_channel = layer_norm(x, **blocks[i]['ln2'])
@@ -113,53 +112,63 @@ def rwkv_net_rnn(token, state, ln_out, blocks, head, emb):
         x += xp
         new_state = np.vstack([xn_channel,
                                xn_token,
-                               rwkv_state_flow(block_w['att']['time_decay'],
-                                               state_wkv, (k, v))])
-        new_states.append(new_state)
-    state = np.stack(new_states)
+                               *rwkv_state_flow(block_w['att']['time_decay'],
+                                                state_wkv, k, v)])
+        new_states = new_states.at[i].set(new_state)
     xn = layer_norm(x, **ln_out)
     logits = head['weight'] @ xn
-    return logits, state
+    return logits, new_states
 
 
-# @jit
-def rwkv_net_parallel(tokens, empty_states, ln_out, blocks, head, emb):
+def rwkv_net_parallel(seq_len: int, tokens, states, ln_out, blocks, head, emb):
     """
+    :param seq_len: int
     :param tokens: int32[seq_len]
-    :param empty_states: float32[n_blocks, seq_len, 5, n_channels]
+    :param states: float32[n_blocks, 5, n_channels]
     :param ln_out:
     :param blocks:
     :param head:
     :param emb: {'weight': float32[n_vocab, n_channels]}
     :return:
     """
+    assert seq_len >= 2
+    rwkv_parallel = vmap(rwkv, in_axes=(0, None, 0, 0, 1, None), out_axes=0)
+    empty_wkv_states = states[:, 2:, :]
+    # assert empty_wkv_states.shape == (len(blocks), 3, seq_len, states.shape[2])
+    prev_xn_token = states[:, 1, :]
+    prev_xn_channel = states[:, 0, :]
+
     x = emb['weight'][tokens, :]
     w_ln0 = blocks[0]['ln0']
     x = layer_norm(x, **w_ln0)
+    new_states = np.empty_like(states)
+    states0 = np.empty_like(states)
     for i in range(len(blocks)):
         block_w = blocks[i]
 
         xn_token = layer_norm(x, **blocks[i]['ln1'])
-        print(xn_token.shape)
-        r, k, v = token_mixing_parallel(xn_token, **block_w['att'])
+        r, k, v = token_mixing_parallel(xn_token, prev_xn_token[i], **block_w['att'])
 
-        state_wkv = jax.lax.associative_scan(
-            partial(rwkv_state_flow, block_w['att']['time_decay']),
-            (empty_states[i], (k, v)),
+        state_wkv, _ = jax.lax.scan(
+            partial(rwkv_state_flow_scan, block_w['att']['time_decay']),
+            empty_wkv_states[0], (k, v),
         )
+        print(state_wkv.shape)
 
-        x += rwkv(r, block_w['att']['output']['weight'], k, v, state_wkv, block_w['att']['time_first'])
+        x += rwkv_parallel(r, block_w['att']['output']['weight'], k, v, state_wkv, block_w['att']['time_first'])
         xn_channel = layer_norm(x, **blocks[i]['ln2'])
-        xp = channel_mixing_parallel(xn_channel, **block_w['ffn'])
+        xp = channel_mixing_parallel(xn_channel, prev_xn_channel[i], **block_w['ffn'])
 
         x += xp
+        new_states = new_states.at[i, :].set(np.stack([xn_channel[-2], xn_token[-2], *(s for s in state_wkv)]))
+        states0 = states0.at[i, :].set(np.stack([xn_channel[0], xn_token[0], *(s for s in state_wkv)]))
     xn = layer_norm(x, **ln_out)
-    logits = head['weight'] @ xn
-    return logits
-
+    # parallel version of `logits = head['weight'] @ xn`, t is time, c is channel, v is vocab
+    logits = np.einsum('tc,vc->tv', xn, head['weight'])
+    return logits, new_states, states0
 # [Done] load params
 # [Done] jit
 # [TODO] associative scan
-# - make state flow using the same array
+#  - [TODO] not trying scan, trying to formulate according to jianlin's blog (is cumsum in rwkv viable)?
 # [TODO] pico-plus
 # [TODO] training

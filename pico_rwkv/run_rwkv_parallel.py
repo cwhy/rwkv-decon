@@ -8,7 +8,8 @@ from safetensors import safe_open
 from tokenizers import Tokenizer
 
 from jax_init_utils import infinite_safe_keys
-from pico_rwkv.pico_rwkv_parallel import rwkv_net_parallel
+from pico_rwkv.pico_rwkv import rwkv_net_w
+from pico_rwkv.pico_rwkv_parallel import rwkv_net_scan, rwkv_net_rnn
 
 path = Path("/Data/lm_models/rwkv")
 model_name = 'RWKV-4-Pile-430M-20220808-8066'
@@ -67,22 +68,46 @@ context = ("\nPumas are large, cat-like animals found in America. When reports c
            " for the descriptions given by people who claimed to have seen the puma were extraordinarily similar."
            "\nThe hunt for the puma began in a small village where a woman picking blackberries saw 'a large cat'"
            " only five yards away from her. It")
+context = "The quick brown fox jumps over the lazy"
 
-token_objs = tokenizer.encode(context)
-
-max_len = 128
-state = np.zeros((n_layers, max_len, 5, n_channels))
+max_len_ = 8
+state = np.zeros((n_layers, 5, n_channels))
 for i in range(n_layers):
-    state = state.at[i, 4].set(-1e30)
+    state = state.at[i, -1].set(-1e30)
 
 
-if len(token_objs.ids) < max_len:
-    l_token_array = np.array([0] * (max_len - len(token_objs.ids)) + token_objs.ids, dtype=np.int32)
+parallel = True
+if parallel:
+    # def pad_tokens(token_objs, max_len):
+    #     if len(token_objs.ids) < max_len:
+    #         l_token_array = np.array([0] * (max_len - len(token_objs.ids)) + token_objs.ids, dtype=np.int32)
+    #     else:
+    #         l_token_array = np.array(token_objs.ids, dtype=np.int32)
+    #     return l_token_array[-max_len:]
+
+    # token_array = pad_tokens(tokenizer.encode(context), max_len_)
+    token_array = np.array(tokenizer.encode(context).ids)
+
+    init_out, state, states0 = rwkv_net_scan(max_len_, token_array, state, **w)
+    print(tokenizer.decode(np.argmax(init_out, axis=-1)))
+
+    init_out = init_out[-1, :]
+    print(states0[0, :, :5])
+
+    state = np.zeros((n_layers, 5, n_channels))
+    for i in range(n_layers):
+        state = state.at[i, -1].set(-1e30)
+
+    outs = []
+    for token in tokenizer.encode(context).ids:
+        init_out, state = rwkv_net_rnn(token, state, **w)
+        print(state[0, :, :5])
+        raise Exception("stop")
+        outs.append(np.argmax(init_out))
+    print(tokenizer.decode(outs))
 else:
-    l_token_array = np.array(token_objs.ids, dtype=np.int32)
-token_array = l_token_array[-max_len:]
-
-init_out, state = rwkv_net_parallel(token_array, state, **w)
+    for token in tokenizer.encode(context).ids:
+        init_out, state = rwkv_net_rnn(token, state, **w)
 
 #%%
 
@@ -104,4 +129,9 @@ for TRIAL in range(NUM_TRIALS):
         if '\ufffd' not in tmp:  # only print when we have a valid utf-8 string
             print(tmp, end="", flush=True)
             out_last = i + 1
-        out, state = rwkv_net_parallel(token, state, **w)
+        # token_array = pad_tokens(tokenizer.encode(token), max_len_)
+        out, state = rwkv_net_rnn(token, state, **w)
+        # print(state[:2, :, :3])
+        # out, state = rwkv_net_w(token, state, w)
+        # print(state[:2, :, :3])
+        # raise Exception("stop")
