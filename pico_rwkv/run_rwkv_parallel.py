@@ -9,7 +9,7 @@ from tokenizers import Tokenizer
 
 from jax_init_utils import infinite_safe_keys
 from pico_rwkv.pico_rwkv import rwkv_net_w
-from pico_rwkv.pico_rwkv_parallel import rwkv_net_scan, rwkv_net_rnn
+from pico_rwkv.pico_rwkv_parallel import rwkv_net_parallel, rwkv_net_rnn
 
 path = Path("/Data/lm_models/rwkv")
 model_name = 'RWKV-4-Pile-430M-20220808-8066'
@@ -88,8 +88,8 @@ if parallel:
     # token_array = pad_tokens(tokenizer.encode(context), max_len_)
     token_array = np.array(tokenizer.encode(context).ids)
 
-    init_out, state, states0 = rwkv_net_scan(max_len_, token_array, state, **w)
-    print(tokenizer.decode(np.argmax(init_out, axis=-1)))
+    init_out, state, states0 = rwkv_net_parallel(max_len_, token_array, state, **w)
+    print("parallel_out", tokenizer.decode(np.argmax(init_out, axis=-1)))
 
     init_out = init_out[-1, :]
     print(states0[0, :, :5])
@@ -102,9 +102,9 @@ if parallel:
     for token in tokenizer.encode(context).ids:
         init_out, state = rwkv_net_rnn(token, state, **w)
         print(state[0, :, :5])
-        raise Exception("stop")
         outs.append(np.argmax(init_out))
-    print(tokenizer.decode(outs))
+    print("rnn_out", tokenizer.decode(outs))
+    raise Exception("stop")
 else:
     for token in tokenizer.encode(context).ids:
         init_out, state = rwkv_net_rnn(token, state, **w)
