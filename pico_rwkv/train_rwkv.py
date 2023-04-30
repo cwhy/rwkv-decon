@@ -13,7 +13,7 @@ from optax import softmax_cross_entropy_with_integer_labels
 import nlp_utils
 from copy_init.weights import get_normal_weights_config_, init
 from custom_dataset import load_jax_cached
-from pico_rwkv.pico_rwkv_parallel import rwkv_net_parallel
+from pico_rwkv.pico_rwkv_parallel import rwkv_net_parallel, rwkv_net_rnn
 from pico_rwkv.pico_rwkv_weights import parse_rwkv_weight
 from picojax.jax_utils import WeightsTree, Arr
 from picojax.random_utils import infinite_safe_keys
@@ -36,6 +36,8 @@ init_weights_ = parse_rwkv_weight(init_weights_raw.keys(), init_weights_raw.__ge
 def rwkv_f(w: WeightsTree, token_array: Arr) -> Arr:
     return rwkv_net_parallel(len(token_array), token_array, **w)
 
+def rwkv_rnn(w: WeightsTree, token_array: Arr, state: Arr) -> tuple[Arr, Arr]:
+    return rwkv_net_rnn(token_array, state, **w)
 
 def loss_f(w: WeightsTree, batch: BatchType) -> Arr:
     inputs, labels = batch
@@ -122,6 +124,13 @@ train_config_ = TrainConfig(loss_fn=loss_f,
 train_state_: TrainState = TrainState(weights=init_weights_,
                                       opt_state=optimizer_.init(init_weights_))
 
+n_channels = 1024
+n_layers = 24
+rnn_init_state = np.zeros((n_layers, 5, n_channels))
+for i in range(n_layers):
+    # to jax state[5 * i + 4] = -1e30
+    rnn_init_state = rnn_init_state.at[i, 4].set(-1e30)
+
 wandb.init(
     project="inside-transformer",
     config=experimental_params,
@@ -143,11 +152,16 @@ for step in range(max_iters):
         # generate_f = jax.jit(partial(dynamic_model_f, train_state_.weights))
         # generated = gpt.generate(generate_f, [0], n_tokens_to_generate=10,
         #                          max_len=batch_config_.block_size)
-        generate_f = partial(rwkv_f, train_state_.weights)
-        # TODO fix generation/ add temperature
-        generated = nlp_utils.generate_static(generate_f, [0],
-                                              n_tokens_to_generate=batch_config_.block_size - 1,
-                                              max_len=batch_config_.block_size)
+        generate_f = partial(rwkv_rnn, train_state_.weights)
+        # generated = nlp_utils.generate_static(generate_f, [0],
+        #                                       n_tokens_to_generate=batch_config_.block_size - 1,
+        #                                       max_len=batch_config_.block_size)
+        generated = nlp_utils.rnn_generate(generate_f,
+                                           "\n",
+                                           tokenizer=
+
+                                           init_state=rnn_init_state,
+                                           length_per_trial=batch_config_.block_size - 1)
         wandb.log({"train_loss": results['train'],
                    "validation_loss": results['val'],
                    "batch_loss": loss,
