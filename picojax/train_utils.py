@@ -10,8 +10,8 @@ from jax import random, numpy as jnp
 from optax import GradientTransformation, OptState
 from typing_extensions import NamedTuple
 
-from clean_frame_utils import Arr, Module, jit_f
-from jax_init_utils import SafeKey
+from .jax_utils import jit_f, Arr
+from .random_utils import SafeKey
 
 Weights = TypeVar('Weights')
 Batch = TypeVar('Batch')
@@ -45,8 +45,7 @@ W = TypeVar('W')
 
 
 class TrainConfig(NamedTuple, Generic[W]):
-    model: Module
-    loss_fn_in: Callable[[Callable[[W, Arr], Arr], W, BatchType], Arr]
+    loss_fn: Callable[[W, BatchType], Arr]
     optimiser: GradientTransformation
 
     def estimate_loss(self,
@@ -65,10 +64,6 @@ class TrainConfig(NamedTuple, Generic[W]):
             results[split] = total_eval_loss / eval_iters
             print(f"Estimated {split} loss: {total_eval_loss / eval_iters}")
         return results
-
-    @jit_f
-    def loss_fn(self, weights: W, batch: BatchType) -> Arr:
-        return self.loss_fn_in(self.model.f, weights, batch)
 
     def train1(self, state: TrainState, batch: BatchType) -> TrainState:
         weights, opt_state = jax_calc_updates(self.optimiser,

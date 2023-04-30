@@ -2,19 +2,17 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from pathlib import Path
 
 import jax.numpy as jnp
 from jax import jit
-
 from safetensors import safe_open
-from pathlib import Path
-
 from safetensors.flax import save_file
 
 from bpe_encoder import get_encoder
-from clean_frame import LN, Linear
-from gpt import GptMha, GptFfn, GptBlock, GptDecoder, Gpt, generate
-from clean_frame_utils import Arr, load_config
+from gpt_recon.clean_frame import LN, Linear
+from gpt_recon.clean_frame_utils import Arr, load_config
+from gpt_recon.gpt import GptMha, GptFfn, GptBlock, GptDecoder, Gpt
 
 gpt_config = Gpt.Config(eps=1e-5,
                         n_channels=768,

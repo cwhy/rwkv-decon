@@ -11,16 +11,14 @@ import optax
 from optax import softmax_cross_entropy_with_integer_labels
 from safetensors import safe_open
 
-import gpt
-from clean_frame import LN, Linear
-from clean_frame import batch_fy
-from clean_frame_utils import Arr
-from clean_frame_utils import load_config
+import gpt_recon.gpt as gpt
+import nlp_utils
+from gpt_recon.clean_frame import batch_fy, LN, Linear
+from gpt_recon.clean_frame_utils import Arr, load_config
 from custom_dataset import load_jax_cached
-from gpt import Gpt
-from gpt import GptMha, GptFfn, GptBlock, GptDecoder
-from jax_init_utils import infinite_safe_keys
-from train_utils import BatchConfig, TrainConfig, TrainState, BatchType
+from gpt_recon.gpt import Gpt, GptMha, GptFfn, GptBlock, GptDecoder
+from picojax.random_utils import infinite_safe_keys
+from picojax.train_utils import BatchConfig, TrainConfig, TrainState, BatchType
 
 # need to install the updated version for optax:
 # pip install git+https://github.com/deepmind/optax.git
@@ -179,9 +177,9 @@ for step in range(max_iters):
         #                          max_len=batch_config_.block_size)
         generate_f = partial(train_config_.model.f, train_state_.weights)
         # TODO fix generation/ add temperature
-        generated = gpt.generate_static(generate_f, [0],
-                                        n_tokens_to_generate=batch_config_.block_size - 1,
-                                        max_len=batch_config_.block_size)
+        generated = nlp_utils.generate_static(generate_f, [0],
+                                              n_tokens_to_generate=batch_config_.block_size - 1,
+                                              max_len=batch_config_.block_size)
         # wandb.log({"train_loss": results['train'],
         #            "validation_loss": results['val'],
         #            "batch_loss": loss,

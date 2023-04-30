@@ -10,13 +10,14 @@ import optax
 from jax import random
 from optax import softmax_cross_entropy_with_integer_labels
 
-import gpt
-from clean_frame import batch_fy
-from clean_frame_utils import Arr, config_weights_check, init_weight_module, ModuleConfig
+import gpt_recon.gpt as gpt
+import nlp_utils
+from gpt_recon.clean_frame import batch_fy
+from gpt_recon.clean_frame_utils import Arr, config_weights_check, init_weight_module, ModuleConfig
 from custom_dataset import load_jax_cached
-from gpt import GptMha, Gpt
-from jax_init_utils import SafeKey, infinite_safe_keys
-from train_utils import BatchConfig, TrainConfig, TrainState, BatchType
+from gpt_recon.gpt import Gpt, GptMha
+from picojax.random_utils import SafeKey, infinite_safe_keys
+from picojax.train_utils import BatchConfig, TrainConfig, TrainState, BatchType
 
 os.environ['JAX_LOG_COMPILES'] = '1'
 
@@ -136,8 +137,8 @@ for step in range(max_iters):
         #                          max_len=batch_config_.block_size)
         generate_f = partial(train_config_.model.f, train_state_.weights)
         # TODO fix generation/ add temperature
-        generated = gpt.generate_static(generate_f, [0],
-                                        n_tokens_to_generate=batch_config_.block_size - 1,
-                                        max_len=batch_config_.block_size)
+        generated = nlp_utils.generate_static(generate_f, [0],
+                                              n_tokens_to_generate=batch_config_.block_size - 1,
+                                              max_len=batch_config_.block_size)
         print(decode(generated), flush=True)
 

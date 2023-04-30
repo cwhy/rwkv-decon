@@ -2,20 +2,13 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import NamedTuple, TypeVar, List, Union, Literal, Protocol, Mapping, cast, Callable
+from typing import NamedTuple, TypeVar, List, Union, Protocol, Mapping, cast, Callable
 
-import jax
-from typing_extensions import runtime
 import jax.numpy as jnp
+from typing_extensions import runtime
 
-from jax_init_utils import kaiming_init, embedding_init, normal_init, dropout_gen, SafeKey
-
-ArrayGen = Literal['kaiming', 'dropout', 'embedding', 'normal']
-Arr = jax.Array
-
-
-def jit_f(f: Callable) -> Callable:
-    return jax.jit(f, static_argnums=(0,), inline=True)
+from picojax.jax_utils import Arr, WeightsTree
+from picojax.random_utils import kaiming_init, embedding_init, normal_init, dropout_gen, SafeKey, ArrayGen
 
 
 class WeightConfig(NamedTuple):
@@ -91,7 +84,6 @@ def check_config(config: NamedTuple) -> None:
 
 
 WeightConfigTree = Mapping[str, Union[WeightConfig, "WeightConfigTree", list["WeightConfigTree"]]]
-WeightsTree = dict[str, Union[Arr, "WeightsTree", list[Union["WeightsTree", Arr]]]]
 
 WeightConfigDict = dict[str, WeightConfig]
 PartsDict = dict[str, Union[ModuleConfig, List[ModuleConfig]]]

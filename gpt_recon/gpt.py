@@ -2,19 +2,17 @@ from __future__ import annotations
 
 import math
 from functools import cache
-from typing import NamedTuple, Optional, cast, TypedDict, List, Literal, Union, Callable
+from typing import NamedTuple, Optional, cast, TypedDict, List, Literal, Union
 
 from chex import assert_shape
 from einops import rearrange
-from jax import numpy as jnp, vmap, random
-from jax.lax import scan
+from jax import numpy as jnp, vmap
 from jax.nn import softmax
-from tqdm import tqdm
 
-from clean_frame import Linear, for_all_T, gelu, LN
-from clean_frame_utils import check_config, WeightConfigDict, PartsDict, WeightsTree, config_weights_check, Arr, \
-    WeightConfig, jit_f
-from jax_init_utils import SafeKey
+from picojax.jax_utils import jit_f, Arr, WeightsTree
+from gpt_recon.clean_frame import Linear, for_all_T, gelu, LN
+from gpt_recon.clean_frame_utils import check_config, WeightConfigDict, PartsDict, config_weights_check, \
+    WeightConfig
 
 
 class GptMha:
@@ -495,74 +493,6 @@ class Gpt:
         self.ln = config.ln.make()
 
 
-def generate(get_logits: Callable[[Arr], Arr], inputs: list[int], n_tokens_to_generate: int, max_len: int):
-    input_window = inputs
-    for _ in tqdm(range(n_tokens_to_generate), "generating"):  # auto-regressive decode loop
-        logits = get_logits(jnp.array(input_window))
-        next_id = jnp.argmax(logits[-1])  # greedy sampling
-        inputs.append(int(next_id))  # append prediction to input
-        input_window = inputs[-max_len:]  # update input window
-
-    return inputs[len(inputs) - n_tokens_to_generate:]  # only return generated ids
-
-
-def generate_static(get_logits: Callable[[Arr], Arr], inputs: list[int], n_tokens_to_generate: int, max_len: int):
-    for _ in tqdm(range(n_tokens_to_generate), "generating"):  # auto-regressive decode loop
-        if len(inputs) >= max_len:
-            input_window = inputs[-max_len:]  # update input window
-        else:
-            input_window = inputs + [0] * (max_len - len(inputs))
-        output_index = len(inputs) - 1
-        logits = get_logits(jnp.array(input_window))
-        next_id = jnp.argmax(logits[output_index])  # greedy sampling
-        inputs.append(int(next_id))  # append prediction to input
-
-    return inputs[len(inputs) - n_tokens_to_generate:]  # only return generated ids
-
-
-# from https://github.com/cgarciae/nanoGPT-jax/blob/master/model.py
-def generate_static_inplace(get_logits: Callable[[Arr], Arr],
-                            key: SafeKey,
-                            inputs: list[int],
-                            n_tokens_to_generate: int,
-                            max_len: int,
-                            temperature=1.0,
-                            top_k=None):
-    input_len = len(inputs)
-    input_tokens = jnp.array(inputs)
-    padding = jnp.zeros(n_tokens_to_generate, dtype=jnp.int32)
-    tokens = jnp.concatenate([input_tokens, padding], axis=-1)
-    indexes = jnp.arange(input_len, input_len + n_tokens_to_generate)
-
-    # tokens index -> tokens None
-    def scan_f(tokens, i):
-        # l: x y
-        # t: a b - -
-        # i: 0 1 2 3
-        step_key = random.fold_in(key.get(), i)
-        # if the sequence context is growing too long we must crop it at block_size
-        # idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
-        # forward the model to get the logits for the index in the sequence
-        logits = get_logits(tokens)
-        # pluck the logits at the final step and scale by desired temperature
-        logits = logits[i - 1] / temperature
-        # optionally crop the logits to only the top k options
-        # sample from the distribution
-        if top_k is not None:
-            top_logits, top_tokens = top_k(logits, min(top_k, logits.shape[-1]))
-            token_idx = random.categorical(step_key, top_logits, axis=-1)
-            next_token = jnp.take_along_axis(top_tokens, token_idx[:, None], axis=-1).squeeze(-1)
-        else:
-            next_token = random.categorical(step_key, logits, axis=-1)
-            # logits = jnp.where(logits < v[:, -1:], float('-inf'), logits)
-        # append sampled index to the running sequence and continue
-        tokens = tokens.at[i].set(next_token)
-
-        return tokens, None
-
-    tokens, _ = scan(scan_f, tokens, indexes)
-
-    return tokens.tolist()
 
 
 def get_positional_encoding(max_len: int, d_model: int):

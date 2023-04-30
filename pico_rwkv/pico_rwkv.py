@@ -35,7 +35,7 @@ def exp_mix(max_coef, k, v_s, v, base):
 
 
 @partial(jit, static_argnames='i')
-def rwkv(r, ow, k, v, state, i: int, time_first, time_decay):
+def rwkv(r, ow, k, v, state, i: int, time_first, time_decay, debug=False):
     """
     the original form of the equation is:
     $\omega = \frac{a_1 + e^{(t_1 + k) - p} \cdot v}{b_1 + e^{(t_1 + k) - p}}$
@@ -59,11 +59,12 @@ def rwkv(r, ow, k, v, state, i: int, time_first, time_decay):
     :param time_decay:
     :return: 
     """
-    wkv_top, wkv_bot, max_coef = state[i, 2], state[i, 3], state[i, 4]
+    v_state, base_state, max_coef = state[i, 2], state[i, 3], state[i, 4]
 
-    wkv_top, wkv_bot, _ = exp_mix(max_coef, k + time_first, wkv_top, v, wkv_bot)
+    wkv_top, wkv_bot, _ = exp_mix(max_coef, k + time_first, v_state, v, base_state)
     wkv = wkv_top / wkv_bot
-    wkv_top_new, wkv_bot_new, max_coef = exp_mix(max_coef + time_decay, k, wkv_top, v, wkv_bot)
+    wkv_top_new, wkv_bot_new, max_coef = exp_mix(max_coef + time_decay, k, v_state, v, base_state)
+
 
     state = state.at[i, 2].set(wkv_top_new)
     state = state.at[i, 3].set(wkv_bot_new)
@@ -72,7 +73,7 @@ def rwkv(r, ow, k, v, state, i: int, time_first, time_decay):
 
 
 @partial(jit, static_argnames='i')
-def token_mixing(x, state, i: int, time_mix_k, time_mix_v, time_mix_r, time_first, time_decay, kw, vw, rw, ow):
+def token_mixing(x, state, i: int, time_mix_k, time_mix_v, time_mix_r, time_first, time_decay, kw, vw, rw, ow, debug=False):
     xk = time_mix(x, state[i, 1], time_mix_k)
     xv = time_mix(x, state[i, 1], time_mix_v)
     xr = time_mix(x, state[i, 1], time_mix_r)
@@ -82,7 +83,7 @@ def token_mixing(x, state, i: int, time_mix_k, time_mix_v, time_mix_r, time_firs
     r = sigmoid(rw @ xr)
     k = kw @ xk
     v = vw @ xv
-    return rwkv(r, ow, k, v, state, i, time_first, time_decay)
+    return rwkv(r, ow, k, v, state, i, time_first, time_decay, debug=debug)
 
 
 @partial(jit, static_argnames='i')
@@ -96,7 +97,7 @@ def channel_mixing(x, state, i: int, time_mix_k, time_mix_r, kw, vw, rw):
 
 
 @partial(jit, static_argnames='i')
-def block(x, state, i: int, att, ffn, ln1, ln2):
+def block(x, state, i: int, att, ffn, ln1, ln2, **kwargs):
     xn = layer_norm(x, **ln1)
     xp, state = token_mixing(xn, state, i,
                              att['time_mix_k'],
@@ -107,7 +108,7 @@ def block(x, state, i: int, att, ffn, ln1, ln2):
                              att['key']['weight'],
                              att['value']['weight'],
                              att['receptance']['weight'],
-                             att['output']['weight'])
+                             att['output']['weight'], debug=kwargs['debug'])
 
     x += xp
     xn = layer_norm(x, **ln2)
@@ -119,12 +120,13 @@ def block(x, state, i: int, att, ffn, ln1, ln2):
 
 
 def rwkv_net(token, state, ln_out, blocks, head, emb):
+    #print(token)
     x = emb['weight'][token]
-    w_ln0 = blocks[0].pop('ln0')
+    w_ln0 = blocks[0]['ln0']
     x = layer_norm(x, **w_ln0)
     for i in range(len(blocks)):
         block_w = blocks[i]
-        x, state = block(x, state, i, **block_w)
+        x, state = block(x, state, i, debug=token == 49, **block_w)
     xn = layer_norm(x, **ln_out)
     x = head['weight'] @ xn
     return x, state

@@ -9,8 +9,8 @@ from jax.experimental.maps import xmap
 from jax.lax import rsqrt
 from jax.numpy import mean, var, sqrt, tanh, pi
 
-from clean_frame_utils import Arr, PartsDict, WeightConfig, WeightsTree, \
-    WeightConfigDict, check_config, config_weights_check, jit_f
+from picojax.jax_utils import jit_f, WeightsTree
+from gpt_recon.clean_frame_utils import Arr, PartsDict, WeightConfig, WeightConfigDict, check_config, config_weights_check
 
 C = TypeVar('C')
 W = TypeVar('W')
