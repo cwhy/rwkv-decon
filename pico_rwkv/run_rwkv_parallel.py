@@ -19,9 +19,8 @@ with safe_open(path / f"{model_name}.safetensors", framework="flax", device="cpu
 
 tokenizer = Tokenizer.from_file(str(path / "20B_tokenizer.json"))
 
-n_channels = 1024
-ffn_ratio = 4
-n_layers = 24
+n_channels = w['emb']['weight'].shape[1]
+n_layers = len(w['blocks'])
 
 key_gen = infinite_safe_keys(0)
 
@@ -54,9 +53,11 @@ context = ("\nPumas are large, cat-like animals found in America. When reports c
 # context = "The quick brown fox jumps over the lazy"
 # context = "Once upon a "
 
+def sample_rwkv_rnn(token_arr: Arr, state: Arr) -> tuple[Arr, Arr]:
+    return rwkv_net_rnn(token_arr, state, **w)
 
-# mode = "scan"
-mode = "rnn"
+mode = "parallel"
+# mode = "rnn"
 # mode = "parallel"
 if mode == "parallel":
     token_array = np.array(tokenizer.encode(context).ids)
@@ -77,8 +78,6 @@ elif mode == "rnn":
     state = np.zeros((n_layers, 5, n_channels))
     for i in range(n_layers):
         state = state.at[i, -1].set(-1e30)
-    def sample_rwkv_rnn(token_arr: Arr, state: Arr) -> tuple[Arr, Arr]:
-        return rwkv_net_rnn(token_arr, state, **w)
     key_gen = infinite_safe_keys(0)
     _ = rnn_generate(sample_rwkv_rnn, context, state, tokenizer, key_gen,
                      argmax=True,
@@ -100,13 +99,13 @@ elif mode == "scan":
         curr_len = len(token_objs)
         batch = []
         while curr_len > max_len:
-            batch.append(np.array(token_objs[:max_len].ids))
+            batch.append(np.array(token_objs[:max_len]))
             token_objs = token_objs[max_len:]
             curr_len = len(token_objs)
-        return batch, np.array(token_objs.ids)
+        return batch, np.array(token_objs)
 
 
-    token_array_batch, left_over = process_tokens(tokenizer.encode(context), max_len_)
+    token_array_batch, left_over = process_tokens(tokenizer.encode(context).ids, max_len_)
     print(token_array_batch)
     print(left_over)
     if len(token_array_batch) > 0:
@@ -118,6 +117,10 @@ elif mode == "scan":
     else:
         print("scan_out", tokenizer.decode(np.argmax(init_out)))
         init_out = init_out[-1, :]
+    key_gen = infinite_safe_keys(0)
+    _ = rnn_generate(sample_rwkv_rnn, context, state, tokenizer, key_gen,
+                     argmax=True,
+                     length_per_trial=100, n_trials=3, temperature=1.0, top_p=0.85)
 
 
 

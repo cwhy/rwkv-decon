@@ -5,7 +5,8 @@ import jax
 from safetensors.flax import save_file
 
 path = Path("/Data/lm_models/rwkv")
-model_name = 'RWKV-4-Pile-430M-20220808-8066'
+# model_name = 'RWKV-4-Pile-430M-20220808-8066'
+model_name = 'RWKV-4-Pile-169M-20220807-8023'
 
 w_raw = torch.load(path/f'{model_name}.pth', map_location='cpu')
 

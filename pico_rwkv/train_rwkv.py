@@ -7,21 +7,20 @@ from pathlib import Path
 import jax.numpy as np
 import optax
 import wandb
-from jax import vmap
-from optax import softmax_cross_entropy_with_integer_labels
 
 import nlp_utils
 from copy_init.weights import get_normal_weights_config_, init
-from custom_dataset import load_jax_cached
+from custom_dataset import load_jax_cached_tokenizer
 from pico_rwkv.pico_rwkv_parallel import rwkv_net_parallel, rwkv_net_rnn
 from pico_rwkv.pico_rwkv_weights import parse_rwkv_weight
 from picojax.jax_utils import WeightsTree, Arr
 from picojax.random_utils import infinite_safe_keys
-from picojax.train_utils import BatchConfig, TrainConfig, TrainState, BatchType
+from picojax.train_utils import BatchConfig, TrainConfig, TrainState, get_lm_loss
 
 os.environ['JAX_LOG_COMPILES'] = '1'
 path = Path("/Data/lm_models/rwkv")
-model_name = 'RWKV-4-Pile-430M-20220808-8066'
+# model_name = 'RWKV-4-Pile-430M-20220808-8066'
+model_name = 'RWKV-4-Pile-169M-20220807-8023'
 
 weight_infos = get_normal_weights_config_(path, model_name)
 
@@ -29,24 +28,19 @@ keygen = infinite_safe_keys(0)
 key = next(keygen)
 
 init_weights_raw = init(weight_infos, rng_key=key)
-init_weights_ = parse_rwkv_weight(init_weights_raw.keys(), init_weights_raw.__getitem__)
-
+init_weights_: WeightsTree = parse_rwkv_weight(init_weights_raw.keys(), init_weights_raw.__getitem__)
 
 
 def rwkv_f(w: WeightsTree, token_array: Arr) -> Arr:
     return rwkv_net_parallel(len(token_array), token_array, **w)
 
+
 def rwkv_rnn(w: WeightsTree, token_array: Arr, state: Arr) -> tuple[Arr, Arr]:
     return rwkv_net_rnn(token_array, state, **w)
 
-def loss_f(w: WeightsTree, batch: BatchType) -> Arr:
-    inputs, labels = batch
-    logits = vmap(rwkv_f, in_axes=(None, 0), out_axes=0)(w, np.array(inputs))
-    return softmax_cross_entropy_with_integer_labels(logits, np.array(labels)).mean()
-
 
 dataset = "play"
-encoded_jax, encode, decode, vocab_size_ = load_jax_cached(dataset=dataset)
+encoded_jax, tokenizer = load_jax_cached_tokenizer(dataset=dataset)
 n = int(len(encoded_jax) * 0.9)
 train_data = encoded_jax[:n]
 valid_data = encoded_jax[n:]
@@ -75,14 +69,14 @@ train_params = {
     'optimizer': 'lion',
 }
 
-experimental_params = {
+experimental_params: dict = {
     'eps': 1e-5,
-    'n_tokens': vocab_size_,
-    # 'n_channels': 768,
-    # 'n_blocks': 12,
+    'n_tokens': tokenizer.get_vocab_size(),
+    'n_channels': init_weights_['emb']['weight'].shape[1],
+    'n_blocks': len(init_weights_['blocks']),
 
-    'batch_size': 8,
-    'block_size': 128,
+    'batch_size': 1,
+    'block_size': 32,
     'train': train_params,
     'model': "rwkv"
 }
@@ -92,7 +86,6 @@ eval_interval = experimental_params['train']['eval_interval']
 eval_iters = experimental_params['train']['eval_iters']
 batch_config_ = BatchConfig(block_size=experimental_params['block_size'],
                             batch_size=experimental_params['batch_size'])
-
 
 if experimental_params['train']['optimizer'] == 'adam':
     adam_config = experimental_params['train']['adam']
@@ -117,17 +110,15 @@ else:
 
 # noinspection PyArgumentList
 # cuz it's a NamedTuple
-train_config_ = TrainConfig(loss_fn=loss_f,
+train_config_ = TrainConfig(loss_fn=partial(get_lm_loss, rwkv_f),
                             optimiser=optimizer_)
 # noinspection PyArgumentList
 # cuz it's a NamedTuple
 train_state_: TrainState = TrainState(weights=init_weights_,
                                       opt_state=optimizer_.init(init_weights_))
 
-n_channels = 1024
-n_layers = 24
-rnn_init_state = np.zeros((n_layers, 5, n_channels))
-for i in range(n_layers):
+rnn_init_state = np.zeros((experimental_params['n_blocks'], 5, experimental_params['n_channels']))
+for i in range(experimental_params['n_blocks']):
     # to jax state[5 * i + 4] = -1e30
     rnn_init_state = rnn_init_state.at[i, 4].set(-1e30)
 
@@ -158,16 +149,16 @@ for step in range(max_iters):
         #                                       max_len=batch_config_.block_size)
         generated = nlp_utils.rnn_generate(generate_f,
                                            "\n",
-                                           tokenizer=
-
+                                           tokenizer=tokenizer,
+                                           key_gen=key_gen,
                                            init_state=rnn_init_state,
                                            length_per_trial=batch_config_.block_size - 1)
         wandb.log({"train_loss": results['train'],
                    "validation_loss": results['val'],
                    "batch_loss": loss,
                    "n_tokens_trained": step * batch_config_.batch_size * batch_config_.block_size,
-                   'generated': wandb.Html(f"{decode(generated)}")})
-        print(decode(generated), flush=True)
+                   'generated': wandb.Html(f"{generated}")})
+    #  print(generated, flush=True)
 
 wandb.finish()
 

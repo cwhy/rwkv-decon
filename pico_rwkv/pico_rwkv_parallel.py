@@ -83,6 +83,18 @@ def channel_mixing_parallel(x, x_prev1, time_mix_k, time_mix_r, kw, vw, rw, **kw
     return channel_mixing_p(x, x_prev, time_mix_k, time_mix_r, kw, vw, rw)
 
 
+def rwkv_scan(state, rs, ks, vs, ow, time_first, time_decay):
+    w, u = time_decay, time_first
+
+    def lru_scannable(carry, new):
+        r, k, v = new
+        new = rwkv(carry, r, k, v, ow, time_first)
+        carry_new = rwkv_state_flow(w, carry, k, v)
+        return np.stack(carry_new), new
+
+    return lax.scan(lru_scannable, state, (rs, ks, vs))
+
+
 def lru_parallel_scannable(left, right):
     (l_exp_kv, l_w), (r_exp_kv, r_w) = left, right
     return l_exp_kv * np.exp(r_w) + r_exp_kv, l_w + r_w
@@ -95,28 +107,36 @@ def rwkv_parallel_scan(seq_len: int, r, k, v, ow, time_first, time_decay):
     exp_k = np.exp(k)
     v_state, _ = lax.associative_scan(lru_parallel_scannable, (exp_k * v, W))
     base_state, _ = lax.associative_scan(lru_parallel_scannable, (exp_k, W))
-    curr_k = np.exp(u) * exp_k
+    curr_diff = exp_k * (np.exp(u + w) - 1)
 
-    def shift1pad0(x):
-        return np.pad(x, ((1, 0), (0, 0)), mode='constant', constant_values=0)[:-1, :]
-
-    v_state = shift1pad0(v_state) + curr_k * v
-    base_state = shift1pad0(base_state) + curr_k
+    v_state += curr_diff * v
+    base_state += curr_diff
 
     wkv = v_state / base_state
     return (r * wkv) @ ow.T
 
 
-def rwkv_scan(state, rs, ks, vs, ow, time_first, time_decay):
+def lru_parallel_scannable_normalized(left, right):
+    (l_exp_kv, l_w, p_w), (r_exp_kv, r_w, p_r) = left, right
+    p = np.maximum(p_w, p_r)
+    return l_exp_kv * np.exp(r_w + p_w - p) + r_exp_kv * np.exp(p_r - p), l_w + r_w, p
+
+
+def rwkv_parallel_scan_stable(r, k, v, ow, time_first, time_decay):
     w, u = time_decay, time_first
+    ones = np.ones_like(k)
 
-    def lru_scannable(carry, new):
-        r, k, v = new
-        new = rwkv(carry, r, k, v, ow, time_first)
-        carry_new = rwkv_state_flow(w, carry, k, v)
-        return np.stack(carry_new), new
+    exp_k = np.exp(k)
+    v_state, _, _ = lax.associative_scan(lru_parallel_scannable_normalized, (v, ones, k))
+    base_state, _, _ = lax.associative_scan(lru_parallel_scannable_normalized, (v, ones, k))
 
-    return lax.scan(lru_scannable, state, (rs, ks, vs))
+    curr_diff = exp_k * (np.exp(u + w) - 1)
+
+    v_state += curr_diff * v
+    base_state += curr_diff
+
+    wkv = v_state / base_state
+    return (r * wkv) @ ow.T
 
 
 # @jit
@@ -153,7 +173,6 @@ def rwkv_net_rnn(token, state, ln_out, blocks, head, emb):
 
 def rwkv_net_scan(seq_len: int, tokens, states, ln_out, blocks, head, emb):
     assert seq_len >= 2
-    zeros_padding = np.zeros_like(emb['weight'][0, :])
     prev_xn_token = states[:, 1, :]
     prev_xn_channel = states[:, 0, :]
     prev_wkv_states = states[:, 2:, :]
@@ -205,8 +224,9 @@ def rwkv_net_parallel(seq_len: int, tokens, ln_out, blocks, head, emb):
         xn_token = layer_norm(x, **blocks[i]['ln1'])
         r, k, v = token_mixing_parallel(xn_token, zeros_padding, **block_w['att'])
 
-        x += rwkv_parallel_scan(seq_len, r, k, v, block_w['att']['output']['weight'],
-                                block_w['att']['time_first'], block_w['att']['time_decay'])
+        xp = rwkv_parallel_scan_stable(r, k, v, block_w['att']['output']['weight'],
+                                       block_w['att']['time_first'], block_w['att']['time_decay'])
+        x += xp
         xn_channel = layer_norm(x, **blocks[i]['ln2'])
         xp = channel_mixing_parallel(xn_channel, zeros_padding, **block_w['ffn'])
 
@@ -222,8 +242,9 @@ def rwkv_net_parallel(seq_len: int, tokens, ln_out, blocks, head, emb):
 #  - trying to formulate according to jianlin's blog (is cumsum in rwkv viable)?
 #  - not trying to use states, only use it for training and fixed-context inference
 #  - [Done] make it work
-#  - [TODO] check numerical issues
-# [TODO] make a scan version and compare with
-#  - [TODO] scan batch of tokens
+#  - [Done] check numerical issues with help of yilun
+# [Done] make a scan version and compare with
+#  - [Done] scan batch of tokens
+# - [TODO] maintain state using normalized version of scan
 # [TODO] pico-plus
 # [TODO] training

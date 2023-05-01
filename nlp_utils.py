@@ -1,15 +1,29 @@
 from __future__ import annotations
 
-from typing import Callable, Iterator
+from typing import Callable, Iterator, Protocol
 
 from jax import numpy as jnp, random, numpy as np
 from jax._src.lax.control_flow import scan
 from jax._src.nn.functions import softmax
-from tokenizers import Tokenizer
 from tqdm import tqdm
 
 from picojax.jax_utils import Arr
 from picojax.random_utils import SafeKey
+
+
+class Tokens(Protocol):
+    ids: list[int]
+
+
+class Tokenizer(Protocol):
+    def encode(self, text: str) -> Tokens:
+        ...
+
+    def decode(self, ids: list[int]) -> str:
+        ...
+
+    def get_vocab_size(self) -> int:
+        ...
 
 
 def generate(get_logits: Callable[[Arr], Arr], inputs: list[int], n_tokens_to_generate: int, max_len: int):

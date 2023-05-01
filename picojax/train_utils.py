@@ -6,11 +6,12 @@ from typing import Iterable, Generic, Iterator
 
 import jax
 import optax
-from jax import random, numpy as jnp
+from jax import random, numpy as jnp, vmap, numpy as np
 from optax import GradientTransformation, OptState
+from optax._src.loss import softmax_cross_entropy_with_integer_labels
 from typing_extensions import NamedTuple
 
-from .jax_utils import jit_f, Arr
+from .jax_utils import jit_f, Arr, WeightsTree
 from .random_utils import SafeKey
 
 Weights = TypeVar('Weights')
@@ -83,3 +84,9 @@ class TrainState(Generic[W], NamedTuple):
 
 
 BatchType = tuple[Iterable[int], Iterable[int]]
+
+
+def get_lm_loss(f: Callable[[WeightsTree, Arr], Arr], w: WeightsTree, batch: BatchType) -> Arr:
+    inputs, labels = batch
+    logits = vmap(f, in_axes=(None, 0), out_axes=0)(w, np.array(inputs))
+    return softmax_cross_entropy_with_integer_labels(logits, np.array(labels)).mean()

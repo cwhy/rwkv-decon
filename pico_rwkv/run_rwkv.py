@@ -13,7 +13,8 @@ from picojax.random_utils import infinite_safe_keys
 from pico_rwkv.pico_rwkv import rwkv_net_w
 
 path = Path("/Data/lm_models/rwkv")
-model_name = 'RWKV-4-Pile-430M-20220808-8066'
+# model_name = 'RWKV-4-Pile-430M-20220808-8066'
+model_name = 'RWKV-4-Pile-169M-20220807-8023'
 # jax.config.update('jax_platform_name', 'cpu')
 
 
@@ -22,9 +23,9 @@ with safe_open(path / f"{model_name}.safetensors", framework="flax", device="cpu
 
 tokenizer = Tokenizer.from_file(str(path / "20B_tokenizer.json"))
 
-n_channels = 1024
-ffn_ratio = 4
-n_layers = 24
+
+n_channels = w['emb']['weight'].shape[1]
+n_layers = len(w['blocks'])
 
 context = ("\nPumas are large, cat-like animals found in America. When reports came into London Zoo that "
            "a wild puma had been spotted forty-five miles south of London, they were not taken seriously."
