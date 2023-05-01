@@ -34,6 +34,18 @@ def exp_mix(max_coef, k, v_s, v, base):
     base_new = e1 * base + e2
     return mix_v, base_new, new_max_coef
 
+def exp_add(v1, v2, p1, p2):
+    """
+    Given
+      x1 --> (v1, p1) --> v1 exp(p1),
+      x2 --> (v2, p2) --> v2 exp(p2),
+    calculate x1 + x2 and normalize it such that the
+    largest exp exponent is 0,
+      x1 + x2 --> (v1 exp(p1-p) + v2 exp(p2-p), p)
+    where p = max(p1, p2)
+    """
+    p = np.maximum(p1, p2)
+    return (v1 * np.exp(p1 - p) + v2 * np.exp(p2 - p)), p
 
 def rwkv(state_wkv, r, k, v, ow, time_first, debug=False):
     """
@@ -136,27 +148,22 @@ def rwkv_parallel_scan_alt(seq_len: int, r, k, v, ow, time_first, time_decay):
 
 def lru_parallel_scannable_normalized(left, right):
     (l_exp_kv, l_w, p_w), (r_exp_kv, r_w, p_r) = left, right
-    p = np.maximum(p_w, p_r)
+    p = np.maximum(p_w + r_w, p_r)
     return l_exp_kv * np.exp(r_w + p_w - p) + r_exp_kv * np.exp(p_r - p), l_w + r_w, p
 
 
 def rwkv_parallel_scan_stable(r, k, v, ow, time_first, time_decay):
     w, u = time_decay, time_first
+    W = np.repeat(w[np.newaxis, :], v.shape[0], axis=0)
     ones = np.ones_like(k)
 
-    exp_k = np.exp(k)
-    v_state, _, _ = lax.associative_scan(lru_parallel_scannable_normalized, (v, ones, k))
-    base_state, _, _ = lax.associative_scan(lru_parallel_scannable_normalized, (v, ones, k))
+    a_state, _, p_state = lax.associative_scan(lru_parallel_scannable_normalized, (v, W, k))
+    b_state, _, _ = lax.associative_scan(lru_parallel_scannable_normalized, (ones, W, k))
 
-    curr_k = np.exp(u) * exp_k
+    c, _ = exp_add(a_state, v, p_state, u+w+k)
+    d, _ = exp_add(b_state, ones, p_state, u+w+k)
 
-    def shift1pad0(x):
-        return np.pad(x, ((1, 0), (0, 0)), mode='constant', constant_values=0)[:-1, :]
-
-    v_state = shift1pad0(v_state) + curr_k * v
-    base_state = shift1pad0(base_state) + curr_k
-
-    wkv = v_state / base_state
+    wkv = c / d
     return (r * wkv) @ ow.T
 
 
