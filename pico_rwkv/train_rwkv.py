@@ -58,12 +58,14 @@ weight_mask = None
 data_path = Path("/Data/nlp/")
 
 str_sampling = False  # turn this on if the data is too large to fit in memory, may be a bit slower
-custom_vocab = False  # turn this off if you want to use the default tokenizer, str_sampling == True does not support custom_token
+custom_vocab = True  # turn this off if you want to use the default tokenizer, str_sampling == True does not support custom_token
 
 # dataset = "play"
 # dataset = "poem"
 # dataset = "english"
-dataset = "russell"
+# dataset = "russell"
+# dataset = "duilian"
+dataset = "MQnovel"
 
 if str_sampling:
     input_data = custom_dataset_str.load(data_path, dataset)
