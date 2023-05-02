@@ -8,22 +8,20 @@ from typing import Optional
 import jax.numpy as np
 import optax
 import wandb
-from safetensors import safe_open
-from safetensors.flax import save_file
+from jax.tree_util import tree_flatten
 from tokenizers import Tokenizer
 
+import custom_dataset
 import custom_dataset_str
 import nlp_utils
 from copy_init.weights import get_normal_weights_config_, init, save_pytree_
 from labels import Labels
 from pico_rwkv.pico_rwkv_parallel import rwkv_net_parallel
 from pico_rwkv.pico_rwkv_rnn import rwkv_net_rnn
-from pico_rwkv.pico_rwkv_weights import parse_rwkv_weight, get_masks_to_train, get_masks_to_train
+from pico_rwkv.pico_rwkv_weights import parse_rwkv_weight
 from picojax.jax_utils import WeightsTree, Arr
 from picojax.random_utils import infinite_safe_keys
 from picojax.train_utils import BatchConfig, TrainConfig, TrainState, get_lm_loss
-from jax.tree_util import tree_flatten, tree_unflatten, PyTreeDef
-
 from python_utils import num_short_form
 
 os.environ['JAX_LOG_COMPILES'] = '1'
@@ -64,17 +62,19 @@ def rwkv_f(w: WeightsTree, token_array: Arr) -> Arr:
 def rwkv_rnn(w: WeightsTree, token_array: Arr, state: Arr) -> tuple[Arr, Arr]:
     return rwkv_net_rnn(token_array, state, **w)
 
-
-#dataset = "play"
-dataset = "english"
 data_path = Path("/Data/nlp/")
-train_str = custom_dataset_str.load(data_path, dataset)
-tokenizer = Tokenizer.from_file(str(model_path / "20B_tokenizer.json"))
-encoded_jax = np.array(tokenizer.encode(train_str).ids)
 
-n = int(len(encoded_jax) * 0.9)
-train_data = encoded_jax[:n]
-valid_data = encoded_jax[n:]
+dataset = "play"
+train_str, tokenizer = custom_dataset.load_jax_cached_tokenizer(data_path, dataset)
+init_weights_['emb']['weight'] = init_weights_['emb']['weight'][:tokenizer.get_vocab_size(), :]  # type: ignore
+init_weights_['head']['weight'] = init_weights_['head']['weight'][:tokenizer.get_vocab_size(), :]  # type: ignore
+# dataset = "english"
+# train_str = custom_dataset_str.load(data_path, dataset)
+# tokenizer = Tokenizer.from_file(str(model_path / "20B_tokenizer.json"))
+
+n = int(len(train_str) * 0.9)
+train_data = train_str[:n]
+valid_data = train_str[n:]
 
 key_gen = infinite_safe_keys(0)
 
@@ -109,8 +109,8 @@ experimental_params: dict = {
 
     'train_tags': [l.fmt() for l in train_tags] if train_tags is not None else None,
 
-    'batch_size': 1,
-    'block_size': 32,
+    'batch_size': 4,
+    'block_size': 128,
     'train': train_params,
     'model': "rwkv"
 }
@@ -120,7 +120,8 @@ eval_interval = experimental_params['train']['eval_interval']
 save_interval = experimental_params['train']['save_interval']
 eval_iters = experimental_params['train']['eval_iters']
 batch_config_ = BatchConfig(block_size=experimental_params['block_size'],
-                            batch_size=experimental_params['batch_size'])
+                            batch_size=experimental_params['batch_size'],
+                            tokenizer=tokenizer)
 
 if experimental_params['train']['optimizer'] == 'adam':
     adam_config = experimental_params['train']['adam']
@@ -167,6 +168,7 @@ assert isinstance(run, wandb.sdk.wandb_run.Run)
 keys_ = next(key_gen).split(max_iters)
 for step in range(max_iters):
     batch_ = batch_config_.sample(train_data, keys_[step])
+    # batch_ = batch_config_.sample_from_str(train_data, keys_[step])
     if step % eval_interval == 0:
         loss = train_config_.loss_fn(train_state_.weights, batch_)
         print(f"\n===[ step {step} is an eval step ]==========")
@@ -178,10 +180,12 @@ for step in range(max_iters):
         print(f"after step {step}, batch loss {loss}")
         results = train_config_.estimate_loss(eval_iters, key_gen, train_state_, batch_config_,
                                               {'train': train_data, 'val': valid_data})
+        # results = train_config_.estimate_loss_str(eval_iters, key_gen, train_state_, batch_config_,
+        #                                       {'train': train_data, 'val': valid_data})
         generate_f = partial(rwkv_rnn, train_state_.weights)
         generated = nlp_utils.rnn_generate(generate_f,
                                            "\n",
-                                           tokenizer=tokenizer,
+                                           tokenizer=batch_config_.tokenizer,
                                            key_gen=key_gen,
                                            init_state=rnn_init_state,
                                            length_per_trial=batch_config_.block_size - 1)
@@ -199,5 +203,6 @@ for step in range(max_iters):
 wandb.finish()
 
 # [Done] add trainable weights (via gradient mask)
+# [TODO] add trainable weights via weight name mask
 # [Done] add checkpointing
 # TODO: add weight decay

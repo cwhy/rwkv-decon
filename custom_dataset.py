@@ -1,5 +1,6 @@
 import os
 from collections import Counter
+from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple, Callable
 
@@ -70,7 +71,8 @@ def load_jax_cached(dataset: str = "english"):
     return encoded_jax, encode, decode, vocab_size
 
 
-class Tokens(NamedTuple):
+@dataclass
+class Tokens:
     ids: list[int]
 
 
@@ -89,7 +91,7 @@ class Tokenizer(NamedTuple):
         return self.vocab_size
 
 
-def load_jax_cached_tokenizer(dataset: str = "english") -> tuple[xp.ndarray, Tokenizer]:
+def load_jax_cached_tokenizer(base_path: Path, dataset: str = "english") -> tuple[xp.ndarray, Tokenizer]:
     text, encode, decode, vocab_size = load(dataset)
     cache_path = base_path / dataset / 'encoded_jax.npy'
     try:

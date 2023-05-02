@@ -8,7 +8,7 @@ def load(base_path: Path, dataset: str = "english"):
 
     def read_book_file(filename: str):
         print(f"reading {filename}...")
-        encodings = ['utf-8', 'gb2312', 'gbk', 'big5', 'utf-16', 'gb18030']
+        encodings = ['utf-8', 'gb18030', 'gbk', 'gb2312', 'big5', 'utf-16']
         for encoding in encodings:
             try:
                 with open(path / filename, 'r', encoding=encoding) as f:
