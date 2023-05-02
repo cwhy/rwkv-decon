@@ -1,16 +1,13 @@
 from pathlib import Path
 
 import jax.numpy as np
-from jax import random
-from jax.nn import softmax
 from safetensors import safe_open
 from tokenizers import Tokenizer
 
 from nlp_utils import rnn_generate
-from pico_rwkv.pico_rwkv_parallel import rwkv_net_rnn
 from pico_rwkv.pico_rwkv_weights import parse_rwkv_weight
 from picojax.random_utils import infinite_safe_keys
-from pico_rwkv.pico_rwkv import rwkv_net_w
+from pico_rwkv.close_to_original.pico_rwkv import rwkv_net_w
 
 path = Path("/Data/lm_models/rwkv")
 # model_name = 'RWKV-4-Pile-430M-20220808-8066'

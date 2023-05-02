@@ -3,37 +3,55 @@ from __future__ import annotations
 import os
 from functools import partial
 from pathlib import Path
+from typing import Optional
 
 import jax.numpy as np
 import optax
 import wandb
+from safetensors import safe_open
+from safetensors.flax import save_file
 from tokenizers import Tokenizer
 
 import custom_dataset_str
 import nlp_utils
-from copy_init.weights import get_normal_weights_config_, init
-from custom_dataset import load_jax_cached_tokenizer
-from pico_rwkv.pico_rwkv_parallel import rwkv_net_parallel, rwkv_net_rnn
-from pico_rwkv.pico_rwkv_weights import parse_rwkv_weight
+from copy_init.weights import get_normal_weights_config_, init, save_pytree_
+from labels import Labels
+from pico_rwkv.pico_rwkv_parallel import rwkv_net_parallel
+from pico_rwkv.pico_rwkv_rnn import rwkv_net_rnn
+from pico_rwkv.pico_rwkv_weights import parse_rwkv_weight, get_masks_to_train, get_masks_to_train
 from picojax.jax_utils import WeightsTree, Arr
 from picojax.random_utils import infinite_safe_keys
 from picojax.train_utils import BatchConfig, TrainConfig, TrainState, get_lm_loss
+from jax.tree_util import tree_flatten, tree_unflatten, PyTreeDef
+
+from python_utils import num_short_form
 
 os.environ['JAX_LOG_COMPILES'] = '1'
-path = Path("/Data/lm_models/rwkv")
+model_path = Path("/Data/lm_models/rwkv")
 # model_name = 'RWKV-4-Pile-430M-20220808-8066'
 model_name = 'RWKV-4-Pile-169M-20220807-8023'
 
-weight_infos = get_normal_weights_config_(path, model_name)
+weight_infos = get_normal_weights_config_(model_path, model_name)
 
 keygen = infinite_safe_keys(0)
 key = next(keygen)
 
 init_weights_raw = init(weight_infos, rng_key=key)
-init_weights_: WeightsTree = parse_rwkv_weight(init_weights_raw.keys(), init_weights_raw.__getitem__)
-n_channels = init_weights_['emb']['weight'].shape[1]
+all_weight_names = list(init_weights_raw.keys())
+
+init_weights_: WeightsTree = parse_rwkv_weight(init_weights_raw.keys(), init_weights_raw.__getitem__, trim=True)
+n_channels = init_weights_['emb']['weight'].shape[1]  # type: ignore
+_, tree_struct = tree_flatten(init_weights_)
+
+train_tags: Optional[list[Labels]] = None
+weight_mask = None
 
 
+# train_tags = [Labels.from_strs('ffn', 'key'), Labels.from_strs('ffn', 'value')]
+# weight_mask = get_masks_to_train(train_tags, weight_infos, trim=True)
+
+
+# %%
 def rwkv_f(w: WeightsTree, token_array: Arr) -> Arr:
     return rwkv_net_parallel(len(token_array), token_array, **w)
 
@@ -43,9 +61,9 @@ def rwkv_rnn(w: WeightsTree, token_array: Arr, state: Arr) -> tuple[Arr, Arr]:
 
 
 dataset = "english"
-base_path = Path("/Data/nlp/")
-train_str = custom_dataset_str.load(base_path, dataset)
-tokenizer = Tokenizer.from_file(str(path / "20B_tokenizer.json"))
+data_path = Path("/Data/nlp/")
+train_str = custom_dataset_str.load(data_path, dataset)
+tokenizer = Tokenizer.from_file(str(model_path / "20B_tokenizer.json"))
 encoded_jax = np.array(tokenizer.encode(train_str).ids)
 
 n = int(len(encoded_jax) * 0.9)
@@ -69,6 +87,7 @@ lion_params = {
 train_params = {
     'eval_iters': 200,
     'eval_interval': 2000,
+    'save_interval': 10000,
     'max_iters': 1000000,
     # 'adam': adam_params,
     'lion': lion_params,
@@ -82,6 +101,8 @@ experimental_params: dict = {
     'n_channels': n_channels,
     'n_blocks': len(init_weights_['blocks']),
 
+    'train_tags': [l.fmt() for l in train_tags] if train_tags is not None else None,
+
     'batch_size': 1,
     'block_size': 32,
     'train': train_params,
@@ -90,6 +111,7 @@ experimental_params: dict = {
 
 max_iters = experimental_params['train']['max_iters']
 eval_interval = experimental_params['train']['eval_interval']
+save_interval = experimental_params['train']['save_interval']
 eval_iters = experimental_params['train']['eval_iters']
 batch_config_ = BatchConfig(block_size=experimental_params['block_size'],
                             batch_size=experimental_params['batch_size'])
@@ -122,6 +144,7 @@ train_config_ = TrainConfig(loss_fn=partial(get_lm_loss, rwkv_f),
 # noinspection PyArgumentList
 # cuz it's a NamedTuple
 train_state_: TrainState = TrainState(weights=init_weights_,
+                                      train_mask=weight_mask,
                                       opt_state=optimizer_.init(init_weights_))
 
 rnn_init_state = np.zeros((experimental_params['n_blocks'], 5, experimental_params['n_channels']))
@@ -129,16 +152,18 @@ for i in range(experimental_params['n_blocks']):
     # to jax state[5 * i + 4] = -1e30
     rnn_init_state = rnn_init_state.at[i, 4].set(-1e30)
 
-wandb.init(
+run = wandb.init(
     project="inside-transformer",
     config=experimental_params,
 )
+assert isinstance(run, wandb.sdk.wandb_run.Run)
+
 keys_ = next(key_gen).split(max_iters)
 for step in range(max_iters):
     batch_ = batch_config_.sample(train_data, keys_[step])
     if step % eval_interval == 0:
         loss = train_config_.loss_fn(train_state_.weights, batch_)
-        print(f"===step {step} is an eval step===")
+        print(f"\n===[ step {step} is an eval step ]==========")
         print(f"before step {step}, batch loss {loss}")
 
     train_state_ = train_config_.train1(train_state_, batch_)
@@ -147,27 +172,26 @@ for step in range(max_iters):
         print(f"after step {step}, batch loss {loss}")
         results = train_config_.estimate_loss(eval_iters, key_gen, train_state_, batch_config_,
                                               {'train': train_data, 'val': valid_data})
-        # generate_f = jax.jit(partial(dynamic_model_f, train_state_.weights))
-        # generated = gpt.generate(generate_f, [0], n_tokens_to_generate=10,
-        #                          max_len=batch_config_.block_size)
         generate_f = partial(rwkv_rnn, train_state_.weights)
-        # generated = nlp_utils.generate_static(generate_f, [0],
-        #                                       n_tokens_to_generate=batch_config_.block_size - 1,
-        #                                       max_len=batch_config_.block_size)
         generated = nlp_utils.rnn_generate(generate_f,
                                            "\n",
                                            tokenizer=tokenizer,
                                            key_gen=key_gen,
                                            init_state=rnn_init_state,
                                            length_per_trial=batch_config_.block_size - 1)
+
         wandb.log({"train_loss": results['train'],
                    "validation_loss": results['val'],
                    "batch_loss": loss,
                    "n_tokens_trained": step * batch_config_.batch_size * batch_config_.block_size,
                    'generated': wandb.Html(f"{generated}")})
-    #  print(generated, flush=True)
+    if step % save_interval == 0:  # and step > 0:
+        n_tokens_trained = step * batch_config_.batch_size * batch_config_.block_size
+        n_tokens_trained_str = num_short_form(n_tokens_trained)
+        wandb.save(save_pytree_(train_state_.weights, run.dir, f"{model_name}_{n_tokens_trained}"), run.dir)
 
 wandb.finish()
 
-# TODO: add trainable weights
+# [Done] add trainable weights (via gradient mask)
+# [Done] add checkpointing
 # TODO: add weight decay

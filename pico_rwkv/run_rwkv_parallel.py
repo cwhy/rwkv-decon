@@ -5,10 +5,12 @@ from safetensors import safe_open
 from tokenizers import Tokenizer
 
 from nlp_utils import rnn_generate
+from pico_rwkv.pico_rwkv_parallel import rwkv_net_parallel
+from pico_rwkv.pico_rwkv_parallel_alternatives import rwkv_net_scan
+from pico_rwkv.pico_rwkv_rnn import rwkv_net_rnn
 from pico_rwkv.pico_rwkv_weights import parse_rwkv_weight
 from picojax.jax_utils import Arr
 from picojax.random_utils import infinite_safe_keys
-from pico_rwkv.pico_rwkv_parallel import rwkv_net_parallel, rwkv_net_rnn, rwkv_net_scan
 
 path = Path("/Data/lm_models/rwkv")
 model_name = 'RWKV-4-Pile-430M-20220808-8066'

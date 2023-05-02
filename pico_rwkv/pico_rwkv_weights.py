@@ -1,6 +1,9 @@
-from typing import Callable, TypeVar, Iterable
+from typing import Callable, TypeVar, Iterable, Optional
 
+from copy_init.weights import WeightConfig, get_weights_mask
+from labels import Labels
 from picojax.jax_utils import Arr, WeightsTree
+from jax import numpy as np
 
 
 def parse_rwkv_weight(keys: Iterable[str], get_tensor: Callable[[str], Arr], trim: bool=False) -> WeightsTree:
@@ -18,17 +21,26 @@ def parse_rwkv_weight(keys: Iterable[str], get_tensor: Callable[[str], Arr], tri
         current_[last] = get_tensor(k)
 
     for i in w['blocks'].keys():
-        w['blocks'][i]['att']['kw'] = w['blocks'][i]['att']['key']['weight']
-        w['blocks'][i]['att']['vw'] = w['blocks'][i]['att']['value']['weight']
-        w['blocks'][i]['att']['rw'] = w['blocks'][i]['att']['receptance']['weight']
-        w['blocks'][i]['ffn']['kw'] = w['blocks'][i]['ffn']['key']['weight']
-        w['blocks'][i]['ffn']['vw'] = w['blocks'][i]['ffn']['value']['weight']
-        w['blocks'][i]['ffn']['rw'] = w['blocks'][i]['ffn']['receptance']['weight']
-        if trim:
-            del w['blocks'][i]['att']['key']['weight']
-            del w['blocks'][i]['att']['value']['weight']
-            del w['blocks'][i]['att']['receptance']['weight']
-            del w['blocks'][i]['ffn']['key']['weight']
-            del w['blocks'][i]['ffn']['value']['weight']
-            del w['blocks'][i]['ffn']['receptance']['weight']
+        att = w['blocks'][i]['att']
+        ffn = w['blocks'][i]['ffn']
+
+        for m in att, ffn:
+            for k in ('key', 'value', 'receptance'):
+                if k in m:
+                    m[k[0] + 'w'] = m[k]['weight']
+                    if trim:
+                        del m[k]['weight']
     return w
+
+
+def get_masks_to_train(train_tags: Optional[list[Labels]], info: dict[str, WeightConfig], trim:bool=False) -> WeightsTree:
+    to_train = get_weights_mask(train_tags, info)
+    mask_raw = {}
+    for k, train in to_train.items():
+        if train:
+            mask_raw[k] = np.ones(info[k].shape, dtype=bool)
+        else:
+            mask_raw[k] = np.zeros(info[k].shape, dtype=bool)
+
+    masks = parse_rwkv_weight(mask_raw.keys(), lambda k: mask_raw[k], trim)
+    return masks

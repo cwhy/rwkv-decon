@@ -15,6 +15,12 @@ class Labels:
         if not isinstance(self.tags, frozenset):
             raise ValueError(f"tags must be a frozenset, not {type(self.tags)}")
 
+    def covers(self, other: Labels) -> bool:
+        return self.tags >= other.tags
+
+    def __contains__(self, item: str) -> bool:
+        return item in self.tags
+
     def __len__(self) -> int:
         return len(self.tags)
 
