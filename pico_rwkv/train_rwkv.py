@@ -39,7 +39,12 @@ key = next(keygen)
 init_weights_raw = init(weight_infos, rng_key=key)
 all_weight_names = list(init_weights_raw.keys())
 
+# randomly initialize weights
 init_weights_: WeightsTree = parse_rwkv_weight(init_weights_raw.keys(), init_weights_raw.__getitem__, trim=True)
+## load weights instead of randomly initialize
+# with safe_open(model_path / f"{model_name}.safetensors", framework="flax", device="cpu") as f:
+#     init_weights_ = parse_rwkv_weight(f.keys(), f.get_tensor)
+
 n_channels = init_weights_['emb']['weight'].shape[1]  # type: ignore
 _, tree_struct = tree_flatten(init_weights_)
 
@@ -60,6 +65,7 @@ def rwkv_rnn(w: WeightsTree, token_array: Arr, state: Arr) -> tuple[Arr, Arr]:
     return rwkv_net_rnn(token_array, state, **w)
 
 
+#dataset = "play"
 dataset = "english"
 data_path = Path("/Data/nlp/")
 train_str = custom_dataset_str.load(data_path, dataset)
