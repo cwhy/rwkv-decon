@@ -77,8 +77,14 @@ class Tokens(NamedTuple):
 
 class Tokenizer(NamedTuple):
     vocab_size: int
-    encode: Callable[[str], Tokens]
-    decode: Callable[[list[int]], str]
+    encode_: Callable[[str], Tokens]
+    decode_: Callable[[list[int]], str]
+
+    def encode(self, text: str) -> Tokens:
+        return self.encode_(text)
+
+    def decode(self, tokens: list[int]) -> str:
+        return self.decode_(tokens)
 
     def get_vocab_size(self) -> int:
         return self.vocab_size

@@ -17,7 +17,7 @@ def time_mix(x, x_prev, mix):
     return x * mix + x_prev * (1 - mix)
 
 
-def exp_mix(max_coef, k, v_s, v, base):
+def exp_mix_both(max_coef, k, v_s, v, base):
     """
     1. If `max_coef >= k`, the mixed value and the updated base value are computed as follows:
        mix_v = v_s + e^(k - max_coef) * v
@@ -35,20 +35,25 @@ def exp_mix(max_coef, k, v_s, v, base):
     return mix_v, base_new, new_max_coef
 
 
+def exp_mix(v1, v2, p1, p2):
+    p = max(p1, p2)
+    return np.exp(p - p1) * v1 + np.exp(p - p2) * v2
+
+
 def rwkv(state_wkv, r, k, v, ow, time_first, debug=False):
     """
     state_wkv: (v_state, wkv_bot, max_coef) / state[i, 2:].T
     """
     v_state, base_state, max_coef = state_wkv
 
-    v_state, base_state, _ = exp_mix(max_coef, k + time_first, v_state, v, base_state)
+    v_state, base_state, _ = exp_mix_both(max_coef, k + time_first, v_state, v, base_state)
     wkv = v_state / base_state
     return ow @ (r * wkv)
 
 
 def rwkv_state_flow(time_decay, state_wkv, k, v, **kwargs):
     v_state, base_state, max_coef = state_wkv
-    a, b, c = exp_mix(max_coef + time_decay, k, v_state, v, base_state)
+    a, b, c = exp_mix_both(max_coef + time_decay, k, v_state, v, base_state)
     return a, b, c
 
 
@@ -118,6 +123,7 @@ def rwkv_parallel_scan(seq_len: int, r, k, v, ow, time_first, time_decay):
     wkv = v_state / base_state
     return (r * wkv) @ ow.T
 
+
 def rwkv_parallel_scan_alt(seq_len: int, r, k, v, ow, time_first, time_decay):
     w, u = time_decay, time_first
     W = np.repeat(w[np.newaxis, :], seq_len, axis=0)
@@ -134,9 +140,10 @@ def rwkv_parallel_scan_alt(seq_len: int, r, k, v, ow, time_first, time_decay):
     wkv = v_state / base_state
     return (r * wkv) @ ow.T
 
+
 def lru_parallel_scannable_normalized(left, right):
     (l_exp_kv, l_w, p_w), (r_exp_kv, r_w, p_r) = left, right
-    p = np.maximum(p_w, p_r)
+    p = np.maximum(p_w + r_w, p_r)
     return l_exp_kv * np.exp(r_w + p_w - p) + r_exp_kv * np.exp(p_r - p), l_w + r_w, p
 
 
@@ -144,17 +151,19 @@ def rwkv_parallel_scan_stable(r, k, v, ow, time_first, time_decay):
     w, u = time_decay, time_first
     ones = np.ones_like(k)
 
-    exp_k = np.exp(k)
-    v_state, _, _ = lax.associative_scan(lru_parallel_scannable_normalized, (v, ones, k))
-    base_state, _, _ = lax.associative_scan(lru_parallel_scannable_normalized, (v, ones, k))
+    v_state, _, v_p = lax.associative_scan(lru_parallel_scannable_normalized, (v, ones, k))
+    base_state, _, b_p = lax.associative_scan(lru_parallel_scannable_normalized, (ones, ones, k))
+    v_state = exp_mix(v_state, v, v_p, 1)
 
-    curr_k = np.exp(u) * exp_k
+    # curr_k = np.exp(u) * exp_k
 
-    def shift1pad0(x):
-        return np.pad(x, ((1, 0), (0, 0)), mode='constant', constant_values=0)[:-1, :]
+    # def shift1pad0(x):
+    #     return np.pad(x, ((1, 0), (0, 0)), mode='constant', constant_values=0)[:-1, :]
 
-    v_state = shift1pad0(v_state) + curr_k * v
-    base_state = shift1pad0(base_state) + curr_k
+    # v_state /= v_p
+    # base_state /= b_p
+    # v_state = shift1pad0(v_state) + curr_k * v
+    # base_state = shift1pad0(base_state) + curr_k
 
     wkv = v_state / base_state
     return (r * wkv) @ ow.T
@@ -245,8 +254,12 @@ def rwkv_net_parallel(seq_len: int, tokens, ln_out, blocks, head, emb):
         xn_token = layer_norm(x, **blocks[i]['ln1'])
         r, k, v = token_mixing_parallel(xn_token, zeros_padding, **block_w['att'])
 
-        xp = rwkv_parallel_scan_stable(r, k, v, block_w['att']['output']['weight'],
+        xp = rwkv_parallel_scan(seq_len, r, k, v, block_w['att']['output']['weight'],
                                 block_w['att']['time_first'], block_w['att']['time_decay'])
+        xp2 = rwkv_parallel_scan_stable(r, k, v, block_w['att']['output']['weight'],
+                                        block_w['att']['time_first'], block_w['att']['time_decay'])
+        print((xp - xp2).max(axis=-1))
+        assert np.allclose(xp, xp2)
         x += xp
         xn_channel = layer_norm(x, **blocks[i]['ln2'])
         xp = channel_mixing_parallel(xn_channel, zeros_padding, **block_w['ffn'])
