@@ -49,32 +49,41 @@ _, tree_struct = tree_flatten(init_weights_)
 train_tags: Optional[list[Labels]] = None
 weight_mask = None
 
-
 # train_tags = [Labels.from_strs('ffn', 'key'), Labels.from_strs('ffn', 'value')]
 # weight_mask = get_masks_to_train(train_tags, weight_infos, trim=True)
 
 
 # %%
-def rwkv_f(w: WeightsTree, token_array: Arr) -> Arr:
-    return rwkv_net_parallel(len(token_array), token_array, **w)
-
-
-def rwkv_rnn(w: WeightsTree, token_array: Arr, state: Arr) -> tuple[Arr, Arr]:
-    return rwkv_net_rnn(token_array, state, **w)
 
 data_path = Path("/Data/nlp/")
 
-dataset = "play"
-train_str, tokenizer = custom_dataset.load_jax_cached_tokenizer(data_path, dataset)
-init_weights_['emb']['weight'] = init_weights_['emb']['weight'][:tokenizer.get_vocab_size(), :]  # type: ignore
-init_weights_['head']['weight'] = init_weights_['head']['weight'][:tokenizer.get_vocab_size(), :]  # type: ignore
-# dataset = "english"
-# train_str = custom_dataset_str.load(data_path, dataset)
-# tokenizer = Tokenizer.from_file(str(model_path / "20B_tokenizer.json"))
+str_sampling = False  # turn this on if the data is too large to fit in memory, may be a bit slower
+custom_vocab = False  # turn this off if you want to use the default tokenizer, str_sampling == True does not support custom_token
 
-n = int(len(train_str) * 0.9)
-train_data = train_str[:n]
-valid_data = train_str[n:]
+# dataset = "play"
+# dataset = "poem"
+# dataset = "english"
+dataset = "russell"
+
+if str_sampling:
+    input_data = custom_dataset_str.load(data_path, dataset)
+    tokenizer = Tokenizer.from_file(str(model_path / "20B_tokenizer.json"))
+else:
+    if custom_vocab:
+        input_data, tokenizer = custom_dataset.load_jax_cached_tokenizer(data_path, dataset)
+    else:
+        input_data_str = custom_dataset_str.load(data_path, dataset)
+        tokenizer = Tokenizer.from_file(str(model_path / "20B_tokenizer.json"))
+        input_data = np.array(tokenizer.encode(input_data_str).ids)
+if custom_vocab:
+    # reduce embedding to vocab size
+    init_weights_['emb']['weight'] = init_weights_['emb']['weight'][:tokenizer.get_vocab_size(), :]  # type: ignore
+    init_weights_['head']['weight'] = init_weights_['head']['weight'][:tokenizer.get_vocab_size(), :]  # type: ignore
+
+n = int(len(input_data) * 0.9)
+train_data = input_data[:n]
+valid_data = input_data[n:]
+
 
 key_gen = infinite_safe_keys(0)
 
@@ -121,7 +130,8 @@ save_interval = experimental_params['train']['save_interval']
 eval_iters = experimental_params['train']['eval_iters']
 batch_config_ = BatchConfig(block_size=experimental_params['block_size'],
                             batch_size=experimental_params['batch_size'],
-                            tokenizer=tokenizer)
+                            tokenizer=tokenizer,
+                            str_sampling=str_sampling)
 
 if experimental_params['train']['optimizer'] == 'adam':
     adam_config = experimental_params['train']['adam']
@@ -143,6 +153,13 @@ elif experimental_params['train']['optimizer'] == 'adamw':
                              eps=adamw_config['eps'])
 else:
     raise ValueError(f"optimizer {experimental_params['train']['optimizer']} not supported")
+
+def rwkv_f(w: WeightsTree, token_array: Arr) -> Arr:
+    return rwkv_net_parallel(len(token_array), token_array, **w)
+
+
+def rwkv_rnn(w: WeightsTree, token_array: Arr, state: Arr) -> tuple[Arr, Arr]:
+    return rwkv_net_rnn(token_array, state, **w)
 
 # noinspection PyArgumentList
 # cuz it's a NamedTuple
@@ -168,7 +185,7 @@ assert isinstance(run, wandb.sdk.wandb_run.Run)
 keys_ = next(key_gen).split(max_iters)
 for step in range(max_iters):
     batch_ = batch_config_.sample(train_data, keys_[step])
-    # batch_ = batch_config_.sample_from_str(train_data, keys_[step])
+
     if step % eval_interval == 0:
         loss = train_config_.loss_fn(train_state_.weights, batch_)
         print(f"\n===[ step {step} is an eval step ]==========")
@@ -180,12 +197,11 @@ for step in range(max_iters):
         print(f"after step {step}, batch loss {loss}")
         results = train_config_.estimate_loss(eval_iters, key_gen, train_state_, batch_config_,
                                               {'train': train_data, 'val': valid_data})
-        # results = train_config_.estimate_loss_str(eval_iters, key_gen, train_state_, batch_config_,
-        #                                       {'train': train_data, 'val': valid_data})
         generate_f = partial(rwkv_rnn, train_state_.weights)
         generated = nlp_utils.rnn_generate(generate_f,
                                            "\n",
                                            tokenizer=batch_config_.tokenizer,
+                                           argmax=True,
                                            key_gen=key_gen,
                                            init_state=rnn_init_state,
                                            length_per_trial=batch_config_.block_size - 1)
@@ -198,7 +214,7 @@ for step in range(max_iters):
     if step % save_interval == 0:  # and step > 0:
         n_tokens_trained = step * batch_config_.batch_size * batch_config_.block_size
         n_tokens_trained_str = num_short_form(n_tokens_trained)
-        wandb.save(save_pytree_(train_state_.weights, run.dir, f"{model_name}_{n_tokens_trained}"), run.dir)
+        wandb.save(save_pytree_(train_state_.weights, run.dir, f"{model_name}_{n_tokens_trained_str}"), run.dir)
 
 wandb.finish()
 
