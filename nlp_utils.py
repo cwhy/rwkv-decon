@@ -123,7 +123,7 @@ def rnn_generate(get_logits_rnn: Callable[[Arr, Arr], tuple[Arr, Arr]],
 
     out_str = ""
     for t in range(n_trials):
-        to_print = f'\n\n--[ Trial {t} ]-----------------\n{context}'
+        to_print = f'--[ Trial {t} ]-----------------\n{context}'
         print(to_print, end="")
         out_str += to_print
         all_tokens = []
@@ -134,7 +134,7 @@ def rnn_generate(get_logits_rnn: Callable[[Arr, Arr], tuple[Arr, Arr]],
                 token = np.argmax(out)
             else:
                 token = sample_logits(out, next(key_gen), temperature, top_p)
-            all_tokens.append(token)
+            all_tokens.append(token.item())
             tmp = tokenizer.decode(all_tokens[out_last:])
             if '\ufffd' not in tmp:  # only print when we have a valid utf-8 string
                 print(tmp, end="", flush=True)

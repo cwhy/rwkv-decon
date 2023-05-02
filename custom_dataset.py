@@ -8,7 +8,6 @@ import jax.numpy as xp
 # dataset = "play"
 base_path = Path("/Data/nlp/")
 
-
 def load(dataset: str = "english"):
     path = base_path / dataset
     books = [f for f in os.listdir(path) if f.endswith('.txt')]

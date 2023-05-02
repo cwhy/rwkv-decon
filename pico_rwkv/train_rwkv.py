@@ -7,7 +7,9 @@ from pathlib import Path
 import jax.numpy as np
 import optax
 import wandb
+from tokenizers import Tokenizer
 
+import custom_dataset_str
 import nlp_utils
 from copy_init.weights import get_normal_weights_config_, init
 from custom_dataset import load_jax_cached_tokenizer
@@ -29,6 +31,7 @@ key = next(keygen)
 
 init_weights_raw = init(weight_infos, rng_key=key)
 init_weights_: WeightsTree = parse_rwkv_weight(init_weights_raw.keys(), init_weights_raw.__getitem__)
+n_channels = init_weights_['emb']['weight'].shape[1]
 
 
 def rwkv_f(w: WeightsTree, token_array: Arr) -> Arr:
@@ -39,8 +42,12 @@ def rwkv_rnn(w: WeightsTree, token_array: Arr, state: Arr) -> tuple[Arr, Arr]:
     return rwkv_net_rnn(token_array, state, **w)
 
 
-dataset = "play"
-encoded_jax, tokenizer = load_jax_cached_tokenizer(dataset=dataset)
+dataset = "english"
+base_path = Path("/Data/nlp/")
+train_str = custom_dataset_str.load(base_path, dataset)
+tokenizer = Tokenizer.from_file(str(path / "20B_tokenizer.json"))
+encoded_jax = np.array(tokenizer.encode(train_str).ids)
+
 n = int(len(encoded_jax) * 0.9)
 train_data = encoded_jax[:n]
 valid_data = encoded_jax[n:]
@@ -72,7 +79,7 @@ train_params = {
 experimental_params: dict = {
     'eps': 1e-5,
     'n_tokens': tokenizer.get_vocab_size(),
-    'n_channels': init_weights_['emb']['weight'].shape[1],
+    'n_channels': n_channels,
     'n_blocks': len(init_weights_['blocks']),
 
     'batch_size': 1,

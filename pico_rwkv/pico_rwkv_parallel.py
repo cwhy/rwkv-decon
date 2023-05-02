@@ -53,14 +53,14 @@ def rwkv(state_wkv, r, k, v, ow, time_first, debug=False):
     """
     v_state, base_state, max_coef = state_wkv
 
-    v_state, base_state, _ = exp_mix(max_coef, k + time_first, v_state, v, base_state)
+    v_state, base_state, _ = exp_mix_both(max_coef, k + time_first, v_state, v, base_state)
     wkv = v_state / base_state
     return ow @ (r * wkv)
 
 
 def rwkv_state_flow(time_decay, state_wkv, k, v, **kwargs):
     v_state, base_state, max_coef = state_wkv
-    a, b, c = exp_mix(max_coef + time_decay, k, v_state, v, base_state)
+    a, b, c = exp_mix_both(max_coef + time_decay, k, v_state, v, base_state)
     return a, b, c
 
 
@@ -230,7 +230,7 @@ def rwkv_net_scan(seq_len: int, tokens, states, ln_out, blocks, head, emb):
     return logits, new_states
 
 
-# @partial(jit, static_argnums=(0,))
+@partial(jit, static_argnums=(0,))
 def rwkv_net_parallel(seq_len: int, tokens, ln_out, blocks, head, emb):
     """
     :param seq_len: int
