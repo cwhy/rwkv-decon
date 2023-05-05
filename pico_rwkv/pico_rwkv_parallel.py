@@ -98,5 +98,6 @@ def rwkv_net_parallel(seq_len: int, tokens, ln_out, blocks, head, emb):
 # [Done] make a scan version and compare with
 #  - [Done] scan batch of tokens
 # - [TODO] maintain state using normalized version of scan
+# - [TODO] merge upper and lower scan
 # [Abandoned] pico-plus
 # [Done] training
