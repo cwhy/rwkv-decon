@@ -29,13 +29,14 @@ class LRABatchConfig(NamedTuple):
     @property
     def samplers(self) -> dict[str, Callable[[SafeKey], MixedLenBatchType]]:
         def get_sampler(loader: DataLoader) -> Callable[[SafeKey], MixedLenBatchType]:
+            loader_sampler = iter(loader.batch_sampler)
             def sampler(key: SafeKey):
-                idx = random.randint(key.get(), (), 0, self.train_size).item()
-                return np.array(loader[idx][0]), np.array(loader[idx][1]), np.array(loader[idx][2]['lengths'])
+                x, y, l = next(loader_sampler)
+                return np.array(x), np.array(y), np.array(l['lengths'])
 
             return sampler
 
-        return {k: get_sampler(v) for k, v in self.dataloaders.items()}
+        return {k: get_sampler(v) for k, v in self.s5_dataloaders.items()}
 
     @property
     def dataloaders(self) -> dict[str, Iterator[MixedLenBatchType]]:

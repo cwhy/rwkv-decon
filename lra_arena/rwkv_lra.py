@@ -70,7 +70,7 @@ train_params = {
     # 'adamw': adam_params,
     'optimizer': 'lion',
 }
-batch_size = 8
+batch_size = 3
 
 batch_config_ = LRABatchConfig.from_s5(
     batch_size=batch_size,

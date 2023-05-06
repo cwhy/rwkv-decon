@@ -65,6 +65,7 @@ class ZeroWeight:
         return cls(name=name, tags=tags, shape=arr.shape)
 
 
+
 def get_weight_config(weight_config_type: WeightConfigType, key: str, arr: Arr, tags: Labels) -> WeightConfig:
     if weight_config_type == 'normal':
         return NormalWeight.from_arr(name=key, tags=tags, arr=arr)

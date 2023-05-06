@@ -118,4 +118,4 @@ def get_lm_loss(f: Callable[[WeightsTree, Arr], Arr], w: WeightsTree, batch: Fix
 def get_classification_loss(f: Callable[[WeightsTree, Arr], Arr], w: WeightsTree, batch: MixedLenBatchType) -> Arr:
     inputs, labels, seq_len = batch
     logits = vmap(f, in_axes=(None, 0), out_axes=0)(w, np.array(inputs))
-    return softmax_cross_entropy_with_integer_labels(logits[:, seq_len], np.array(labels)).mean()
+    return softmax_cross_entropy_with_integer_labels(logits[np.arange(logits.shape[0]), seq_len], np.array(labels)).mean()
