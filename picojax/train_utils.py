@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import Callable, TypeVar, Optional, Union, Protocol, Collection
+from typing import Callable, TypeVar, Optional, Union, Protocol, Collection, Sequence
 from typing import Iterable, Generic, Iterator
 
 import jax
@@ -104,16 +104,18 @@ class TrainState(Generic[W], NamedTuple):
         return self._replace(**kwargs)
 
 
-BatchType = tuple[Iterable[int], Iterable[int]]
+FixedLenBatchType = tuple[Iterable[int], Iterable[int]]
+MixedLenBatchType = tuple[Iterable[int], Iterable[int], Iterable[int]]
+BatchType = Union[FixedLenBatchType, MixedLenBatchType]
 
 
-def get_lm_loss(f: Callable[[WeightsTree, Arr], Arr], w: WeightsTree, batch: BatchType) -> Arr:
+def get_lm_loss(f: Callable[[WeightsTree, Arr], Arr], w: WeightsTree, batch: FixedLenBatchType) -> Arr:
     inputs, labels = batch
     logits = vmap(f, in_axes=(None, 0), out_axes=0)(w, np.array(inputs))
     return softmax_cross_entropy_with_integer_labels(logits, np.array(labels)).mean()
 
 
-def get_classification_loss(f: Callable[[WeightsTree, Arr], Arr], w: WeightsTree, batch: BatchType) -> Arr:
-    inputs, labels = batch
+def get_classification_loss(f: Callable[[WeightsTree, Arr], Arr], w: WeightsTree, batch: MixedLenBatchType) -> Arr:
+    inputs, labels, seq_len = batch
     logits = vmap(f, in_axes=(None, 0), out_axes=0)(w, np.array(inputs))
-    return softmax_cross_entropy_with_integer_labels(logits[:, -1], np.array(labels)).mean()
+    return softmax_cross_entropy_with_integer_labels(logits[:, seq_len], np.array(labels)).mean()

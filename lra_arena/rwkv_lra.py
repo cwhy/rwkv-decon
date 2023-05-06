@@ -10,7 +10,6 @@ import optax
 import wandb
 from jax.tree_util import tree_flatten
 
-import nlp_utils
 from copy_init.weights import get_normal_weights_config_, init, save_pytree_
 from labels import Labels
 from lra_arena.lra_utils import LRABatchConfig
@@ -19,7 +18,7 @@ from pico_rwkv.pico_rwkv_rnn import rwkv_net_rnn
 from pico_rwkv.pico_rwkv_weights import parse_rwkv_weight
 from picojax.jax_utils import WeightsTree, Arr
 from picojax.random_utils import infinite_safe_keys
-from picojax.train_utils import TrainConfig, TrainState, get_lm_loss, get_classification_loss
+from picojax.train_utils import TrainConfig, TrainState, get_classification_loss
 from python_utils import num_short_form
 
 os.environ['JAX_LOG_COMPILES'] = '1'
