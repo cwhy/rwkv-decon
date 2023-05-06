@@ -16,7 +16,7 @@ from gpt_recon.clean_frame_utils import Arr, init_weight_module
 from custom_dataset import load_jax_cached
 from gpt_recon.gpt import Gpt
 from picojax.random_utils import infinite_safe_keys
-from picojax.train_utils import BatchConfig, TrainConfig, TrainState, BatchType
+from picojax.train_utils import LMBatchConfig, TrainConfig, TrainState, BatchType
 
 # need to install the updated version for optax:
 # pip install git+https://github.com/deepmind/optax.git
@@ -75,8 +75,8 @@ experimental_params = {
 max_iters = experimental_params['train']['max_iters']
 eval_interval = experimental_params['train']['eval_interval']
 eval_iters = experimental_params['train']['eval_iters']
-batch_config_ = BatchConfig(block_size=experimental_params['block_size'],
-                            batch_size=experimental_params['batch_size'])
+batch_config_ = LMBatchConfig(block_size=experimental_params['block_size'],
+                              batch_size=experimental_params['batch_size'])
 
 # dataset = "english"
 
@@ -154,8 +154,9 @@ for step in range(max_iters):
     if step % eval_interval == 0:
         loss = train_config_.loss_fn(train_state_.weights, batch_)
         print(f"after step {step}, batch loss {loss}")
-        results = train_config_.estimate_loss(eval_iters, key_gen, train_state_, batch_config_,
-                                              {'train': train_data, 'val': valid_data})
+        results = train_config_.estimate_loss(eval_iters, key_gen, train_state_,
+                                              {'train': partial(batch_config_.sample, train_data),
+                                               'val': partial(batch_config_.sample, valid_data)})
         # generate_f = jax.jit(partial(dynamic_model_f, train_state_.weights))
         # generated = gpt.generate(generate_f, [0], n_tokens_to_generate=10,
         #                          max_len=batch_config_.block_size)

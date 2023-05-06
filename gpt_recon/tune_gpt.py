@@ -18,7 +18,7 @@ from gpt_recon.clean_frame_utils import Arr, load_config
 from custom_dataset import load_jax_cached
 from gpt_recon.gpt import Gpt, GptMha, GptFfn, GptBlock, GptDecoder
 from picojax.random_utils import infinite_safe_keys
-from picojax.train_utils import BatchConfig, TrainConfig, TrainState, BatchType
+from picojax.train_utils import LMBatchConfig, TrainConfig, TrainState, BatchType
 
 # need to install the updated version for optax:
 # pip install git+https://github.com/deepmind/optax.git
@@ -81,8 +81,8 @@ experimental_params = {
 max_iters = experimental_params['train']['max_iters']
 eval_interval = experimental_params['train']['eval_interval']
 eval_iters = experimental_params['train']['eval_iters']
-batch_config_ = BatchConfig(block_size=experimental_params['block_size'],
-                            batch_size=experimental_params['batch_size'])
+batch_config_ = LMBatchConfig(block_size=experimental_params['block_size'],
+                              batch_size=experimental_params['batch_size'])
 
 gpt_config_ = Gpt.Config(eps=experimental_params['eps'],
                          n_channels=experimental_params['n_channels'],

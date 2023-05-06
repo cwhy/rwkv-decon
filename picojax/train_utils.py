@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from functools import partial
-from typing import Callable, TypeVar, Optional, Union
+from typing import Callable, TypeVar, Optional, Union, Protocol, Collection
 from typing import Iterable, Generic, Iterator
 
 import jax
@@ -34,12 +34,11 @@ def jax_calc_updates(
     return optax.apply_updates(weights, updates), opt_state
 
 
-class BatchConfig(NamedTuple):
+class LMBatchConfig(NamedTuple):
     block_size: int
     batch_size: int
     tokenizer: Tokenizer
     str_sampling: bool = False
-
 
     def sample_jax(self, data: Arr, rng_key: SafeKey) -> tuple[Iterable[int], Iterable[int]]:
         ix = random.randint(key=rng_key.get(), minval=0, maxval=len(data) - self.block_size, shape=(self.batch_size,))
@@ -62,6 +61,7 @@ class BatchConfig(NamedTuple):
             assert not isinstance(data, str), 'data must be an array when str_sampling is False'
             return self.sample_jax(data, rng_key)
 
+
 W = TypeVar('W')
 
 
@@ -73,14 +73,13 @@ class TrainConfig(NamedTuple, Generic[W]):
                       eval_iters: int,
                       rng_key_gen: Iterator[SafeKey],
                       train_state: TrainState,
-                      batch_config: BatchConfig,
-                      data: dict[str, Arr]) -> dict[str, float]:
+                      samplers: dict[str, Callable[[SafeKey], BatchType]]) -> dict[str, float]:
 
         results = {}
-        for split in data.keys():
+        for split, sampler in samplers.items():
             total_eval_loss = 0
             for key in next(rng_key_gen).split(eval_iters):
-                eval_batch = batch_config.sample(data[split], key)
+                eval_batch = sampler(key)
                 total_eval_loss += self.loss_fn(train_state.weights, eval_batch).item()
             results[split] = total_eval_loss / eval_iters
             print(f"Estimated {split} loss: {total_eval_loss / eval_iters}")
@@ -112,3 +111,9 @@ def get_lm_loss(f: Callable[[WeightsTree, Arr], Arr], w: WeightsTree, batch: Bat
     inputs, labels = batch
     logits = vmap(f, in_axes=(None, 0), out_axes=0)(w, np.array(inputs))
     return softmax_cross_entropy_with_integer_labels(logits, np.array(labels)).mean()
+
+
+def get_classification_loss(f: Callable[[WeightsTree, Arr], Arr], w: WeightsTree, batch: BatchType) -> Arr:
+    inputs, labels = batch
+    logits = vmap(f, in_axes=(None, 0), out_axes=0)(w, np.array(inputs))
+    return softmax_cross_entropy_with_integer_labels(logits[:, -1], np.array(labels)).mean()

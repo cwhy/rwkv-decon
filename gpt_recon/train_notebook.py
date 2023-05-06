@@ -17,7 +17,7 @@ from gpt_recon.clean_frame_utils import Arr, config_weights_check, init_weight_m
 from custom_dataset import load_jax_cached
 from gpt_recon.gpt import Gpt, GptMha
 from picojax.random_utils import SafeKey, infinite_safe_keys
-from picojax.train_utils import BatchConfig, TrainConfig, TrainState, BatchType
+from picojax.train_utils import LMBatchConfig, TrainConfig, TrainState, BatchType
 
 os.environ['JAX_LOG_COMPILES'] = '1'
 
@@ -54,7 +54,7 @@ max_iters = 100000
 eval_interval = 1000
 learning_rate_ = 1e-4
 eval_iters = 100
-batch_config_ = BatchConfig(block_size=128, batch_size=4)
+batch_config_ = LMBatchConfig(block_size=128, batch_size=4)
 
 # dataset = "english"
 dataset = "play"

@@ -11,3 +11,9 @@ batch_size = 8
 seed = 0
 data_path = Path("/Data")
 trainloader, valloader, testloader, aux_dataloaders, n_classes, seq_len, in_dim, train_size = create_dataset_fn(data_path, seed=0, bsz=batch_size)
+print(aux_dataloaders)
+print(in_dim)
+print(seq_len)
+print(n_classes)
+print(next(iter(trainloader))[0].shape)
+print(next(iter(trainloader))[1].shape)
